@@ -208,6 +208,9 @@ int main(int argc, char *argv[]){
 
     /// CREATE TABLE first
     if(fsql!=NULL){
+        fprintf(fsql,"/**************************************** \n");
+        fprintf(fsql,"      %s \n\n",argv[1]);
+        fprintf(fsql,"****************************************/ \n");
         fprintf(fsql,"\nDELIMITER ; \n\n");
         fprintf(fsql,"CREATE TABLE IF NOT EXISTS tbl%s(\n",argv[1]);
         fprintf(fsql,"\t%sID\t\tINT NOT NULL AUTO_INCREMENT,\n",argv[1]);
@@ -310,6 +313,9 @@ int main(int argc, char *argv[]){
         fprintf(fsql,"BEGIN\n\tUPDATE tbl%s SET RecordLockedByUserID=0, RecordLockTime=NULL WHERE %sID=v%sID;\nEND\n",argv[1],argv[1],argv[1]);
 
         fprintf(fsql,"\n\n//\n\n");
+        fprintf(fsql,"\n/**************************************** \n\n");
+        fprintf(fsql,"\n     end  %s \n\n",argv[1]);
+        fprintf(fsql,"\n****************************************/ \n\n");
 
         fclose(fsql);
 
@@ -349,6 +355,11 @@ int main(int argc, char *argv[]){
             if(compresult==0){
                 tp=0;
             } 
+            strcpy(teststring,"TINYINT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
 
             strcpy(teststring,"DECIMAL(10,2)");
             compresult = strcmp(types[count], teststring);
@@ -406,6 +417,11 @@ int main(int argc, char *argv[]){
             if(compresult==0){
                 tp=0;
             }        
+            strcpy(teststring,"TINYINT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
             strcpy(teststring,"int");
             compresult = strcmp(types[count], teststring);
             if(compresult==0){
@@ -458,10 +474,15 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\tpublic DateTime dateModified {get=>_dateModified; set=> _dateModified=value;}\n");
         fprintf(fcs,"\tpublic int ModifiedByUserID {get=>_ModifiedByUserID; set=> _ModifiedByUserID=value;}\n");
 
-
+        fprintf(fcs,"\tpublic %s load(int ID, %s o){\n",argv[1],argv[1]);
+        fprintf(fcs,"}\n\n");
+        
+        fprintf(fcs,"public class %sD{\n",argv[1]);
+        fprintf(fcs,"\tprotected string _LastErrorD = \"\";\n");
+        fprintf(fcs,"\n\tpublic string LastErrorD {get=>_LastErrorD; set=> _LastErrorD=value;}\n\n");
         fprintf(fcs,"\tpublic %s load(int ID, %s o){\n",argv[1],argv[1]);
         fprintf(fcs,"\t\to.%sID = ID;\n",argv[1]);
-        fprintf(fcs,"\t\tstring connString = ConfigurationManager.ConnectionStrings[dllglobal.connectionname].ToString();\n");
+        fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
         fprintf(fcs,"\t\t\to = load(ID, con, o);\n");
@@ -472,9 +493,10 @@ int main(int argc, char *argv[]){
 
 
         fprintf(fcs,"\tpublic %s load(int ID, MySqlConnection con, %s o){\n", argv[1], argv[1]);
+        fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
         fprintf(fcs,"\t\to.%sID = ID;\n",argv[1]);
         fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
-        fprintf(fcs,"\t\tsql = \"%sID \";\n", argv[1]);
+        fprintf(fcs,"\t\tsql += \"%sID \";\n", argv[1]);
         count = 0;
         for(count==0;count<totRows;count++){
             fprintf(fcs,"\t\tsql += \",%s \";\n", fields[count]);
@@ -498,6 +520,11 @@ int main(int argc, char *argv[]){
         for(count==0;count<totRows;count++){
             tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
             strcpy(teststring,"INT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
+            strcpy(teststring,"TINYINT");
             compresult = strcmp(types[count], teststring);
             if(compresult==0){
                 tp=0;
@@ -564,17 +591,20 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t\t}\n");
         fprintf(fcs,"\t\t\t}\n");
         fprintf(fcs,"\t\t\to.LastError = \"\";\n");
+        fprintf(fcs,"\t\t\t_LastErrorD = \"\";\n");
 //        fprintf(fcs,"\t\t\tret = true;\n");
         fprintf(fcs,"\t\t}catch(Exception ex){\n");
         fprintf(fcs,"\t\t\to.LastError = ex.Message;\n");
+        fprintf(fcs,"\t\t\t_LastErrorD = ex.Message;\n");
   //      fprintf(fcs,"\t\t\tret = false;\n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn o;\n");
         fprintf(fcs,"\t}\n");
         
         fprintf(fcs,"\tpublic %s save(%s o, int curUserID){\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
         fprintf(fcs,"\t\tint ret = 0;\n");
-        fprintf(fcs,"\t\tstring connString = ConfigurationManager.ConnectionStrings[dllglobal.connectionname].ToString();\n");
+        fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
         fprintf(fcs,"\t\t\to = save(con,o,curUserID);\n");
@@ -593,12 +623,13 @@ int main(int argc, char *argv[]){
             fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"v%s\",o.%s);\n",fields[count],fields[count]);
             
         }
-        fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"vModifiedByUserID\",curUserID);\n");
+        fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"vCurrentUserID\",curUserID);\n");
         fprintf(fcs,"\t\t\ttry{\n");
         fprintf(fcs,"\t\t\t\tvar recid = cmd.ExecuteScalar();\n");
         fprintf(fcs,"\t\t\t\tint.TryParse(recid.ToString(), out ret);\n");
         fprintf(fcs,"\t\t\t}catch (Exception ex){\n");
         fprintf(fcs,"\t\t\t\to.LastError = ex.Message;\n");
+        fprintf(fcs,"\t\t\t\t_LastErrorD = ex.Message;\n");
         fprintf(fcs,"\t\t\t\tret = -1;\n");
         fprintf(fcs,"\t\t\t}\n");
         fprintf(fcs,"\t\t}\n");
@@ -610,7 +641,7 @@ int main(int argc, char *argv[]){
 
         fprintf(fcs,"\tpublic int delete(%s o, int curUserID){\n",argv[1]);
         fprintf(fcs,"\t\tint ret = 0;\n");
-        fprintf(fcs,"\t\tstring connString = ConfigurationManager.ConnectionStrings[dllglobal.connectionname].ToString();\n");
+        fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
         fprintf(fcs,"\t\t\tret = delete(con,o, curUserID);\n");
@@ -626,7 +657,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tusing (MySqlCommand cmd = new MySqlCommand(\"sp_Delete%s\", con)){\n", argv[1]);
         fprintf(fcs,"\t\t\tcmd.CommandType = CommandType.StoredProcedure;\n");
         fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"v%sID\",o.%sID);\n",argv[1],argv[1]);
-        fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"vModifiedByUserID\",curUserID);\n");
+        fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"vCurrentUserID\",curUserID);\n");
         fprintf(fcs,"\t\t\ttry{\n");
         fprintf(fcs,"\t\t\t\tvar recid = cmd.ExecuteNonQuery();\n");
         fprintf(fcs,"\t\t\t\tint.TryParse(recid.ToString(), out ret);\n");
@@ -637,59 +668,92 @@ int main(int argc, char *argv[]){
         
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn ret;\n");
-        fprintf(fcs,"\t}\n\n");
+        fprintf(fcs,"\t}\n\n\n");
+        fprintf(fcs,"}\n\n\n");
                     
         
+        fprintf(fcs,"public class %sBL{\n",argv[1]);
+        
+        fprintf(fcs,"\tprotected string _LastErrorB = \"\";\n");
+        fprintf(fcs,"\n\tpublic string LastErrorB {get=>_LastErrorB; set=> _LastErrorB=value;}\n\n");
+
+        fprintf(fcs,"\tpublic %s load(int ID,%s o){\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\to.%sID=ID; \n",argv[1]);
+        fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
+        fprintf(fcs,"\t\to = d.load(ID,o,curUserID); \n");
+        fprintf(fcs,"\t\t_LastErrorB = d.LastErrorD; \n");
+        fprintf(fcs,"\t\treturn o; \n");
+
+        fprintf(fcs,"\t}\n\n");
+
+        fprintf(fcs,"\tpublic %s save(%s o,int curUserID){\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
+        fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
+        fprintf(fcs,"\t\to = d.save(o,curUserID); \n");
+        fprintf(fcs,"\t\t_LastErrorB = d.LastErrorD; \n");
+        fprintf(fcs,"\t\treturn o; \n");
+        fprintf(fcs,"\t}\n\n");
+        
+        fprintf(fcs,"\tpublic int delete(%s o,int curUserID){\n",argv[1]);
+        fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
+        fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
+        fprintf(fcs,"\t\tint ret = d.delete(o,curUserID); \n");
+        fprintf(fcs,"\t\t_LastErrorB = d.LastErrorD; \n");
+        fprintf(fcs,"\t\treturn ret; \n");
+        fprintf(fcs,"\t}\n\n");
+
         fprintf(fcs,"\tpublic void setHistory(%s nObj,%s oObj,int curUserID){\n",argv[1],argv[1]);
-        fprintf(fcs,"\t\tAuditLog a = new AuditLog();\n");
-        fprintf(fcs,"\t\ta.DoHistory(nObj, oObj, nObj.%sID);\n",argv[1]);
+        fprintf(fcs,"\t\tAuditLogController a = new AuditLogController();\n");
+        fprintf(fcs,"\t\ta.DoHistory(nObj, oObj, nObj.%sID,curUserID);\n",argv[1]);
         fprintf(fcs,"\t}\n\n");
         fprintf(fcs,"\tpublic void setHistory(%s o, int curUserID){\n",argv[1]);
-        fprintf(fcs,"\t\tAuditLog a = new AuditLog(curUserID, \"%s\", \"%sID\",oObj%sID, clsAuditLog.ActionType.Insert, oObj%sID, 0);\n",argv[1],argv[1],argv[1],argv[1]);
+        fprintf(fcs,"\t\tAuditLog a = new AuditLog(curUserID, \"%s\", \"%sID\",o.%sID, AuditLog.ActionType.Insert, o.%sID, 0);\n",argv[1],argv[1],argv[1],argv[1]);
         fprintf(fcs,"\t\t(new AuditLogBL()).save(a);\n");
         fprintf(fcs,"\t}\n");
         fprintf(fcs,"}\n");
 
-
-        fprintf(fcs,"\tpublic void setHistory(cls%s Old){\n",argv[1]);
-
-/*
-public void DoHistory(clsSecurityGroup onew, clsSecurityGroup oold, int ObjectID)
-        {
-            this.items.Clear();
-            string basetable = "SecurityGroup";
-            string oldvalue = "";
-            string newvalue = "";
-            ActionType actiontype = ActionType.Update;
-
-            if (onew.SecurityGroupID > 0)
-            {
-                if (onew.Description != oold.Description)
-                {
-                    items.Add(new clsAuditLogItem(appglobal.curUserID, basetable, "Description", ObjectID, actiontype, onew.Description, oold.Description));
-                }
-               
-                if (items.Count > 0)
-                {
-                    string connString = ConfigurationManager.ConnectionStrings[appglobal.connectionname].ToString();
-                    MySqlConnection con = new MySqlConnection(connString);
-                    con.Open();
-                    foreach (clsAuditLogItem item in items)
-                    {
-                        item.save(con);
-                    }
-                    con.Close();
-                }
+        fprintf(fcs,"//// put this into AuditLog.cs\n");
+        fprintf(fcs,"\tpublic void DoHistory(%s oNew, %s oOld, int ObjectID,int curUserID){\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\tthis.items.Clear();\n");
+        fprintf(fcs,"\t\tstring basetable = \"%s\";\n",argv[1]);
+        fprintf(fcs,"\t\tstring oldvalue = \"\";\n");
+        fprintf(fcs,"\t\tstring newvalue = \"\";\n");
+        fprintf(fcs,"\t\tAuditLog.ActionType actiontype = AuditLog.ActionType.Update;\n");
+        fprintf(fcs,"\t\tif (oNew.%sID > 0){\n",argv[1]);
+        count = 0;
+        tp = 0;
+        for(count==0;count<totRows;count++){
+            strcpy(teststring,"DATE");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
+            }        
+            strcpy(teststring,"DATETIME");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
             }
 
+            if(tp==4){
+                fprintf(fcs,"\t\t\tif(oNew.%s != oOld.%s){\n",fields[count],fields[count]);
+                fprintf(fcs,"\t\t\t\tnewvalue = (oNew.%s == null) ? \"\": oNew.%s.ToString();\n",fields[count],fields[count]);
+                fprintf(fcs,"\t\t\t\toldvalue = (oOld.%s == null) ? \"\" : oOld.%s.ToString();\n",fields[count],fields[count]);
+                fprintf(fcs,"\t\t\t\titems.Add(new AuditLog(curUserID, basetable, \"%s\", ObjectID, actiontype, newvalue, oldvalue));\n",fields[count]);
+                fprintf(fcs,"\t\t\t}");
+            }else{
+                fprintf(fcs,"\t\t\tif(oNew.%s != oOld.%s){\n",fields[count],fields[count]);
+                fprintf(fcs,"\t\t\t\titems.Add(new AuditLog(curUserID, basetable, \"%s\", ObjectID, actiontype, oNew.%s, oOld.%s));",fields[count],fields[count],fields[count]);
+                fprintf(fcs,"\t\t\t}\n");
+            }
+            
         }
-
-
-
-
-*/
-
-
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\tif(items.Count > 0) {\n");
+        fprintf(fcs,"\t\t\tforeach(AuditLog item in items){  \n");
+        fprintf(fcs,"\t\t\t\t(new AuditLogBL()).save(item);  \n");
+        fprintf(fcs,"\t\t\t}  \n");
+        fprintf(fcs,"\t\t}  \n");
+        fprintf(fcs,"\t}\n");
         fclose(fcs);
     }
 
@@ -822,14 +886,93 @@ public void DoHistory(clsSecurityGroup onew, clsSecurityGroup oold, int ObjectID
 
 
 
+    //// create the helper cs form procedures
+
+    char filenamecsu[128];
+    snprintf(filenamecsu, sizeof filenamecsu, "%s.unit.cs",argv[1]);
+
+
+    FILE *fcsu;
+    fcsu = fopen(filenamecsu,"w");
+
+    count = 0;
+
+    if(fcsu!=NULL){
+        
+        fprintf(fcsu,"namespace UnitTesting{\n\n");
+        fprintf(fcsu,"\t[TestClass()]\n");
+        fprintf(fcsu,"\tpublic class %sTests{\n",argv[1]);
+        fprintf(fcsu,"\t\tprivate int testUserID = 37;\n");
+        fprintf(fcsu,"\t\t[TestMethod()]\n");
+        fprintf(fcsu,"\t\tpublic void TestLoad(){\n");
+        fprintf(fcsu,"\t\t\tDALGlobal.connectionString = UTGlobal.connectionstring;\n");
+        fprintf(fcsu,"\t\t\t%sBL b = new %sBL();\n",argv[1],argv[1]);
+        fprintf(fcsu,"\t\t\t%s o = new %s();\n",argv[1],argv[1]);
+        fprintf(fcsu,"\t\t\to = b.load(11111,o,testUserID);\n");
+        fprintf(fcsu,"\t\t\tif(o.LastError.Length>0){\n");
+        fprintf(fcsu,"\t\t\t\tAssert.Fail(o.LastError);\n");
+        fprintf(fcsu,"\t\t\t}else{\n");
+        fprintf(fcsu,"\t\t\t\t\n");
+        fprintf(fcsu,"\t\t\t}\n");
+        fprintf(fcsu,"\t\t}\n");
+        fprintf(fcsu,"\t\t[TestMethod()]\n");
+        fprintf(fcsu,"\t\tpublic void TestSave(){\n");
+        fprintf(fcsu,"\t\t\tDALGlobal.connectionString = UTGlobal.connectionstring;\n");
+        fprintf(fcsu,"\t\t\t%sBL b = new %sBL();\n",argv[1],argv[1]);
+        fprintf(fcsu,"\t\t\t%s o = new %s();\n",argv[1],argv[1]);
+        fprintf(fcsu,"\t\t\t/// add some data?\n");
+        fprintf(fcsu,"\t\t\to = b.load(11111,o,testUserID);\n");
+        fprintf(fcsu,"\t\t\tif(o.LastError.Length>0){\n");
+        fprintf(fcsu,"\t\t\t\tAssert.Fail(o.LastError);\n");
+        fprintf(fcsu,"\t\t\t}else{\n");
+        fprintf(fcsu,"\t\t\t\t\n");
+        fprintf(fcsu,"\t\t\t\to = b.save(o,testUserID);\n");
+        fprintf(fcsu,"\t\t\t\tif(o.LastError.Length>0){\n");
+        fprintf(fcsu,"\t\t\t\t\tAssert.Fail(o.LastError);\n");
+        fprintf(fcsu,"\t\t\t\t}else{\n");
+        fprintf(fcsu,"\t\t\t\t\t\n");
+        fprintf(fcsu,"\t\t\t\t}\n");
+        fprintf(fcsu,"\t\t\t}\n");
+        fprintf(fcsu,"\t\t}\n");
+        fprintf(fcsu,"\t\t[TestMethod()]\n");
+        fprintf(fcsu,"\t\tpublic void TestDelete(){\n");
+        fprintf(fcsu,"\t\t\tDALGlobal.connectionString = UTGlobal.connectionstring;\n");
+        fprintf(fcsu,"\t\t\t%sBL b = new %sBL();\n",argv[1],argv[1]);
+        fprintf(fcsu,"\t\t\t%s o = new %s();\n",argv[1],argv[1]);
+        fprintf(fcsu,"\t\t\to = b.save(o,testUserID);\n");
+        fprintf(fcsu,"\t\t\tif(o.LastError.Length>0){\n");
+        fprintf(fcsu,"\t\t\t\tAssert.Fail(o.LastError);\n");
+        fprintf(fcsu,"\t\t\t}else{\n");
+
+        fprintf(fcsu,"\t\t\t\tif(o.%sID > 0){\n",argv[1]);
+        fprintf(fcsu,"\t\t\t\t\tint i = b.delete(o,testUserID);\n");
+        fprintf(fcsu,"\t\t\t\t\tif(i==0){\n");
+        fprintf(fcsu,"\t\t\t\t\t\tAssert.Fail(\"save returned 0:\" + b.LastErrorB);\n");
+        fprintf(fcsu,"\t\t\t\t\t}else{\n");
+        fprintf(fcsu,"\t\t\t\t\t\tif(b.LastErrorB.Length>0){\n");
+        fprintf(fcsu,"\t\t\t\t\t\t\tAssert.Fail(\"\" + b.LastErrorB);\n");
+        fprintf(fcsu,"\t\t\t\t\t\t}\n");
+        fprintf(fcsu,"\t\t\t\t\t}\n");
+        fprintf(fcsu,"\t\t\t\t}else{\n");
+        fprintf(fcsu,"\t\t\t\t\t\n");
+        fprintf(fcsu,"\t\t\t\t}\n");
+        fprintf(fcsu,"\t\t\t}\n");
+        fprintf(fcsu,"\t\t\t\n");
+        fprintf(fcsu,"\t\t}\n");
+        
+        fprintf(fcsu,"}\n");
+        
+        
+        fclose(fcsu);
+    }
 
 
 
+/*
 
 
 
-
-
+*/
 
 
 
