@@ -669,9 +669,188 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn ret;\n");
         fprintf(fcs,"\t}\n\n\n");
-        fprintf(fcs,"}\n\n\n");
-                    
         
+        fprintf(fcs,"\tpublic List<%s> get%ssL(){\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\tList<%s> l = new List<%s>();\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
+        fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
+        fprintf(fcs,"\t\t\tcon.Open();\n");
+        fprintf(fcs,"\t\t\tl = get%ssL(con);\n",argv[1]);
+        fprintf(fcs,"\t\t\tcon.Close();\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\treturn l;\n");
+        fprintf(fcs,"\t}\n");
+                    
+        fprintf(fcs,"\tpublic List<%s> get%ssL(MySqlConnection con){\n", argv[1], argv[1]);
+
+        fprintf(fcs,"\t\tList<%s> l = new List<%s>(); \"\";\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
+        fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
+        fprintf(fcs,"\t\tsql += \"%sID \";\n", argv[1]);
+        count = 0;
+        for(count==0;count<totRows;count++){
+            fprintf(fcs,"\t\tsql += \",%s \";\n", fields[count]);
+        }
+        fprintf(fcs,"\t\tsql += \",RecordDeleted \";\n");
+        fprintf(fcs,"\t\tsql += \",RecordLockByUserID \";\n");
+        fprintf(fcs,"\t\tsql += \",RecordLockTime \";\n");
+        fprintf(fcs,"\t\tsql += \",dateCreated \";\n");
+        fprintf(fcs,"\t\tsql += \",dateModified \";\n");
+        fprintf(fcs,"\t\tsql += \",ModifiedByUserID \";\n");
+        fprintf(fcs,"\t\tsql += \"FROM tbl%s  \";\n", argv[1]);
+        fprintf(fcs,"\t\tsql += \"WHERE %sID=\" + o.%sID + \";\";\n", argv[1],argv[1]);
+        fprintf(fcs,"\t\ttry{\n");
+        fprintf(fcs,"\t\t\tusing(MySqlCommand cmd = new MySqlCommand(sql,con)){\n");
+        fprintf(fcs,"\t\t\t\tMySqlDataReader r;\n");
+        fprintf(fcs,"\t\t\t\tusing(r = cmd.ExecuteReader()){\n");
+        fprintf(fcs,"\t\t\t\t\twhile(r.Read()){\n");
+        fprintf(fcs,"\t\t\t\t\t\t%s o = new %s();\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\t\t\t\t\to.%sID =r.IsDBNull(\"%sID\") ? 0 : r.GetInt32(\"%sID\");\n",argv[1],argv[1],argv[1]);
+        count = 0;
+        compresult = 0;
+        tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
+        for(count==0;count<totRows;count++){
+            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
+            strcpy(teststring,"INT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
+            strcpy(teststring,"TINYINT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
+            strcpy(teststring,"int");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            } 
+
+            strcpy(teststring,"DECIMAL(10,2)");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=3;
+            }
+            strcpy(teststring,"DATE");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
+            }        
+            strcpy(teststring,"DATETIME");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
+            }
+            strcpy(teststring,"TIME");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=5;
+            }
+
+            if(tp==0){
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+            }else if(tp==1){
+                // float
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                
+            }else if(tp==2){
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? \"\" : r.GetString(\"%s\");\n", fields[count], fields[count], fields[count]);
+            }else if(tp==3){
+                // double
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+            }else if(tp==4){
+                // DateTime
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? DateTime.MinValue : r.GetDateTime(\"%s\");\n", fields[count], fields[count], fields[count]);
+            }else if(tp==5){
+                // Time
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? DateTime.MinValue : r.GetDateTime(\"%s\");\n", fields[count], fields[count], fields[count]);
+            }else{
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? \"\" : r.GetString(\"%s\");\n", fields[count], fields[count], fields[count]);
+            }
+            
+        }
+        fprintf(fcs,"\t\t\t\t\t\to.RecordDeleted =r.IsDBNull(\"RecordDeleted\") ? false : r.GetBoolean(\"RecordDeleted\");\n");
+        fprintf(fcs,"\t\t\t\t\t\to.RecordLockByUserID =r.IsDBNull(\"RecordLockByUserID\") ? 0 : r.GetInt32(\"RecordLockByUserID\");\n");
+        fprintf(fcs,"\t\t\t\t\t\to.RecordLockTime =r.IsDBNull(\"RecordLockTime\") ? DateTime.MinValue : r.GetDateTime(\"RecordLockTime\");\n");
+        fprintf(fcs,"\t\t\t\t\t\to.dateCreated =r.IsDBNull(\"dateCreated\") ? DateTime.MinValue : r.GetDateTime(\"dateCreated\");\n");
+        fprintf(fcs,"\t\t\t\t\t\to.dateModified =r.IsDBNull(\"dateModified\") ? DateTime.MinValue : r.GetDateTime(\"dateModified\");\n");
+        fprintf(fcs,"\t\t\t\t\t\to.ModifiedByUserID =r.IsDBNull(\"ModifiedByUserID\") ? 0 : r.GetInt32(\"ModifiedByUserID\");\n");
+
+
+        fprintf(fcs,"\t\t\t\t\t\tl.Add(o);\n");
+        fprintf(fcs,"\t\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t\t\tr.Close();\n");
+        fprintf(fcs,"\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t}\n");
+        fprintf(fcs,"\t\t\t_LastErrorD = \"\";\n");
+        fprintf(fcs,"\t\t}catch(Exception ex){\n");
+        fprintf(fcs,"\t\t\t_LastErrorD = ex.Message;\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\treturn l;\n");
+        fprintf(fcs,"\t}\n");
+       
+
+
+
+        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString, string strSelect){\n",argv[1]);
+        fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
+        fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
+        fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
+        fprintf(fcs,"\t\t\tcon.Open();\n");
+        fprintf(fcs,"\t\t\tdt = get%ssDT(con,srchString, strSelect);\n",argv[1]);
+        fprintf(fcs,"\t\t\tcon.Close();\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\treturn dt;\n");
+        fprintf(fcs,"\t}\n");
+                    
+        fprintf(fcs,"\tprivate DataTable get%ssDT(MySqlConnection con,string srchString, string strSelect){\n", argv[1]);
+
+        fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
+        fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
+        fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
+        fprintf(fcs,"\t\tsql += \"%sID, \";\n", argv[1]);
+        fprintf(fcs,"\t\tif(strSelect.Length>0){\n");
+        fprintf(fcs,"\t\t\tsql += strSelect;\n");
+        fprintf(fcs,"\t\t}else{\n");
+        count = 0;
+        for(count==0;count<totRows;count++){
+            if(count==0){
+                /// leave off the comma
+                fprintf(fcs,"\t\t\tsql += \"%s \";\n", fields[count]);
+            }else{
+                fprintf(fcs,"\t\t\tsql += \",%s \";\n", fields[count]);
+            }
+        }
+        fprintf(fcs,"\t\t\tsql += \",RecordDeleted \";\n");
+        fprintf(fcs,"\t\t\tsql += \",RecordLockByUserID \";\n");
+        fprintf(fcs,"\t\t\tsql += \",RecordLockTime \";\n");
+        fprintf(fcs,"\t\t\tsql += \",dateCreated \";\n");
+        fprintf(fcs,"\t\t\tsql += \",dateModified \";\n");
+        fprintf(fcs,"\t\t\tsql += \",ModifiedByUserID \";\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\tsql += \"FROM tbl%s  \";\n", argv[1]);
+        fprintf(fcs,"\t\tif(srchString.Length>0){\n");
+        fprintf(fcs,"\t\t\tsql += \" WHERE Description LIKE '%%\" + srchString + \"%%'\"\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\t//sql += \"ORDER BY Description \"\n");
+        fprintf(fcs,"\t\ttry{\n");
+        fprintf(fcs,"\t\t\tusing(MySqlDataAdapter da = new MySqlDataAdapter(sql,con)){\n");
+        fprintf(fcs,"\t\t\t\tdt = new DataTable();\n");
+        fprintf(fcs,"\t\t\t\tda.Fill(dt);\n");
+        fprintf(fcs,"\t\t\t\t_LastErrorD = \"\";\n");
+        fprintf(fcs,"\t\t\t}\n");
+        fprintf(fcs,"\t\t}catch(Exception ex){\n");
+        fprintf(fcs,"\t\t\t_LastErrorD = ex.Message;\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\treturn dt;\n");
+        fprintf(fcs,"\t}\n");
+        fprintf(fcs,"}\n\n\n");
+
+
+
+
+
         fprintf(fcs,"public class %sBL{\n",argv[1]);
         
         fprintf(fcs,"\tprotected string _LastErrorB = \"\";\n");
@@ -680,7 +859,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\tpublic %s load(int ID,%s o){\n",argv[1],argv[1]);
         fprintf(fcs,"\t\to.%sID=ID; \n",argv[1]);
         fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
-        fprintf(fcs,"\t\to = d.load(ID,o,curUserID); \n");
+        fprintf(fcs,"\t\to = d.load(ID,o); \n");
         fprintf(fcs,"\t\t_LastErrorB = d.LastErrorD; \n");
         fprintf(fcs,"\t\treturn o; \n");
 
@@ -710,7 +889,77 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tAuditLog a = new AuditLog(curUserID, \"%s\", \"%sID\",o.%sID, AuditLog.ActionType.Insert, o.%sID, 0);\n",argv[1],argv[1],argv[1],argv[1]);
         fprintf(fcs,"\t\t(new AuditLogBL()).save(a);\n");
         fprintf(fcs,"\t}\n");
-        fprintf(fcs,"}\n");
+        //fprintf(fcs,"}\n");
+
+        fprintf(fcs,"\tpublic List<%s> get%ssL(){\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
+        fprintf(fcs,"\t\tList<%s> l = new List<%s>();\n",argv[1],argv[1]);
+        fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
+        fprintf(fcs,"\t\tl = d.get%ssL(); \n",argv[1]);
+        fprintf(fcs,"\t\t_LastErrorB = d.LastErrorD; \n");
+        fprintf(fcs,"\t\treturn l; \n");
+        fprintf(fcs,"\t}\n\n");
+        
+        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString,string strSelect){\n",argv[1]);
+        fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
+        fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
+        fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
+        fprintf(fcs,"\t\tdt = d.get%ssDT(srchString, strSelect); \n",argv[1]);
+        fprintf(fcs,"\t\t_LastErrorB = d.LastErrorD; \n");
+        fprintf(fcs,"\t\treturn dt; \n");
+        fprintf(fcs,"\t}\n\n");
+
+        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString,int UserViewID){\n",argv[1]);
+        fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
+        fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
+        fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
+        fprintf(fcs,"\t\tif(UserViewID>0){\n");
+        fprintf(fcs,"\t\t\tUserViewFieldBL uvbl = new UserViewFieldBL();; \n");
+        fprintf(fcs,"\t\t\tList<UserViewField> o = new List<UserViewField>();\n");
+        fprintf(fcs,"\t\t\to = uvbl.getUserViewFields(UserViewID);\n");
+        fprintf(fcs,"\t\t\tif(o.Count > 0){\n");
+        fprintf(fcs,"\t\t\t\tstring s = string.Join(\",\",o.Select(x => BLLGlobal.SafeFieldName(x.FieldName)));\n");
+        fprintf(fcs,"\t\t\t\tdt = d.get%ssDT(srchString, s); \n",argv[1]);
+        fprintf(fcs,"\t\t\t_LastErrorB = d.LastErrorD; \n");
+        fprintf(fcs,"\t\t\t}else{\n");
+        fprintf(fcs,"\t\t\t_LastErrorB = \"No Fields in this UserView\";\n");
+        fprintf(fcs,"\t\t\t}\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\treturn dt; \n");
+        fprintf(fcs,"\t}\n\n");
+        
+        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString,List<UserViewField> fields){\n",argv[1]);
+        fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
+        fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
+        fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
+        fprintf(fcs,"\t\tif(fields.Count > 0){\n");
+        fprintf(fcs,"\t\t\tstring s = string.Join(\",\",fields.Select(x => BLLGlobal.SafeFieldName(x.FieldName)));\n");
+        fprintf(fcs,"\t\t\tdt = d.get%ssDT(srchString, s); \n",argv[1]);
+        fprintf(fcs,"\t\t\t_LastErrorB = d.LastErrorD; \n");
+        fprintf(fcs,"\t\t}else{\n");
+        fprintf(fcs,"\t\t\t_LastErrorB = \"No Fields in this UserView\";\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\treturn dt; \n");
+        fprintf(fcs,"\t}\n\n");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         fprintf(fcs,"//// put this into AuditLog.cs\n");
         fprintf(fcs,"\tpublic void DoHistory(%s oNew, %s oOld, int ObjectID,int curUserID){\n",argv[1],argv[1]);
@@ -754,6 +1003,17 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t}  \n");
         fprintf(fcs,"\t\t}  \n");
         fprintf(fcs,"\t}\n");
+
+
+
+
+
+
+
+
+
+
+
         fclose(fcs);
     }
 
@@ -784,17 +1044,27 @@ int main(int argc, char *argv[]){
         
         fprintf(fcsx,"\n\n");
         fprintf(fcsx,"\tint %sID;\n",argv[1]);
-        fprintf(fcsx,"\tcls%s %s;\n\n\n",argv[1],argv[1]);
-
+        fprintf(fcsx,"\t%s Obj%s;\n\n\n",argv[1],argv[1]);
+        fprintf(fcsx,"\tprivate List<UserView> views = new List<UserView>();\n");
+        fprintf(fcsx,"\tUserView selectedView = null;\n");
         fprintf(fcsx,"\tpublic frm%s(){\n",argv[1]);
         fprintf(fcsx,"\t\tInitializeComponent();\n");
         fprintf(fcsx,"\t\tappglobal.applyTheme(this);\n");
+        fprintf(fcsx,"\t\tloadViewsMenu();\n");
         fprintf(fcsx,"\t}\n");
         fprintf(fcsx,"\tpublic event EventHandler<CloseFormEventArgs> SaveComplete;\n\n");
         fprintf(fcsx,"\tpublic void load%s(int ID){\n",argv[1]);
         fprintf(fcsx,"\t\tthis.%sID=ID;\n",argv[1]);
-        fprintf(fcsx,"\t\tthis.%s = new cls%s();\n",argv[1],argv[1]);
-        fprintf(fcsx,"\t\tif (%s.load(ID)){\n",argv[1]);
+        fprintf(fcsx,"\t\tthis.Obj%s = new %s();\n",argv[1],argv[1]);
+        fprintf(fcsx,"\t\t%sbl = new %sBL();\n",argv[1],argv[1]);
+
+        fprintf(fcsx,"\t\tObj%s = %sbl.load%s(ID,Obj%s);\n",argv[1],argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\tif(%sbl.LastErrorB.Length > 1){\n",argv[1]);
+        fprintf(fcsx,"\t\t\tErrorLogBL.addLog(appglobal.curUserID,\"ERROR F%s-001 Unable to load %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\t\tMessageBox.Show(\"ERROR F%s-001 Unable to load %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\t}else{\n");
+
+
         count = 0;
         for(count==0;count<totRows;count++){
             tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
@@ -816,17 +1086,17 @@ int main(int argc, char *argv[]){
 
             if(tp==4){
                 fprintf(fcsx,"\t\t\tif(%s.%s > DateTime.MinValue){\n",argv[1],fields[count]);
-                fprintf(fcsx,"\t\t\t\tthis.txt%s.Text = %s.%s.ToString(\"MM/dd/yyyy\");\n", fields[count],argv[1],fields[count]);
+                fprintf(fcsx,"\t\t\t\tthis.txt%s.Text = Obj%s.%s.ToString(\"MM/dd/yyyy\");\n", fields[count],argv[1],fields[count]);
                 fprintf(fcsx,"\t\t\t}\n");
             }else{
-                fprintf(fcsx,"\t\t\tthis.txt%s.Text = %s.%s;\n", fields[count],argv[1],fields[count]);
+                fprintf(fcsx,"\t\t\tthis.txt%s.Text = Obj%s.%s;\n", fields[count],argv[1],fields[count]);
             }
                 
         }
         
-        fprintf(fcsx,"\t\t}else{\n");
-        fprintf(fcsx,"\t\t\tMessageBox.Show(\"Unable to load record: \" + %s.LastError);\n",argv[1]);
         fprintf(fcsx,"\t\t}\n");
+        fprintf(fcsx,"\t}\n");
+        fprintf(fcsx,"\tpublic void save%s(bool closeOnComplete=true){\n",argv[1]);
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
@@ -849,37 +1119,140 @@ int main(int argc, char *argv[]){
             }
 
             if(tp==4){
-                fprintf(fcsx,"\t\tDateTime.TryParse(this.txt%s.Text + "", out %s.%s);\n",fields[count],argv[1],fields[count]);
+                fprintf(fcsx,"\t\tDateTime.TryParse(this.txt%s.Text + "", out Obj%s.%s);\n",fields[count],argv[1],fields[count]);
             }else{
-                fprintf(fcsx,"\t\t%s.%s = this.txt%s.Text;\n", argv[1],fields[count],fields[count]);
+                fprintf(fcsx,"\t\tObj%s.%s = this.txt%s.Text;\n", argv[1],fields[count],fields[count]);
             }
                 
         }
         fprintf(fcsx,"\t\tbool wasinsert = true;\n");
-        fprintf(fcsx,"\t\tif (%s.%sID > 0){\n",argv[1],argv[1]);
-        fprintf(fcsx,"\t\t\twasinsert = false;   \n");
-        fprintf(fcsx,"\t\t\tcls%s cOld = new cls%s();\n",argv[1],argv[1]);
-        fprintf(fcsx,"\t\t\tif (cOld.load(this.ContactID)){\n");
-        fprintf(fcsx,"\t\t\t\t%s.setHistory(cOld);\n",argv[1]);
+        fprintf(fcsx,"\t\t%sBL %sbl = new %sBL();\n",argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\tif(Obj%s.%sID>0){\n",argv[1],argv[1]);
+        fprintf(fcsx,"\t\t\twasinsert = false;\n");
+        fprintf(fcsx,"\t\t\t%s oOld = %sbl.load%s(Obj%s.%sID,oOld);\n",argv[1],argv[1],argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\t\tif(oOld.%sID>0){\n",argv[1]);
+        fprintf(fcsx,"\t\t\t%sbl.setHistory(cOld,%s,appglobal.curUserID);\n",argv[1],argv[1]);
         fprintf(fcsx,"\t\t\t}\n");
         fprintf(fcsx,"\t\t}\n");
-        
-            
-        fprintf(fcsx,"\t\tcontact.save();   \n");
-        fprintf(fcsx,"\t\tif (wasinsert){\n\t\t\tcontact.setHistory();\n\t\t}\n");
-        fprintf(fcsx,"\t\tEventHandler<CloseFormEventArgs> handler = this.SaveComplete;\n");
-        fprintf(fcsx,"\t\tif(handler != null){\n");
-        fprintf(fcsx,"\t\t\t/// this would signify that the parent form needs a refresh   \n");
-        fprintf(fcsx,"\t\t\tCloseFormEventArgs e = new CloseFormEventArgs();\n");
-        fprintf(fcsx,"\t\t\tif (wasinsert){\n");
-        fprintf(fcsx,"\t\t\t\te.ComletedAction = CloseFormEventArgs.FormAction.RecordSavedInsert;\n");
-        fprintf(fcsx,"\t\t\t}else{\n");
-        fprintf(fcsx,"\t\t\t\te.ComletedAction = CloseFormEventArgs.FormAction.RecordSavedUpdate;\n");
+
+        fprintf(fcsx,"\t\t%sbl.LastErrorB = \"\";\n",argv[1]);
+        fprintf(fcsx,"\t\tObj%s = %sbl.save(Obj%s,appglobal.curUserID);\n",argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\tif(%sbl.LastErrorB.Length>0){\n",argv[1]);
+        fprintf(fcsx,"\t\t\tErrorLogBL.addLog(appglobal.curUserID,\"ERROR F%s-002 Unable to save %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\t\tMessageBox.Show(\"ERROR F%s-002 Unable to save %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
+
+        fprintf(fcsx,"\t\t}else{\n");
+
+        fprintf(fcsx,"\t\t\tif(wasinsert){\n");
+        fprintf(fcsx,"\t\t\t\t%sbl.LastErrorB = \"\";\n",argv[1]);
+        fprintf(fcsx,"\t\t\t\t%sbl.setHistory(Obj%s,appglobal.curUserID);\n",argv[1],argv[1]);
+        fprintf(fcsx,"\t\t\t\tif(%sbl.LastErrorB.Length>0){\n",argv[1]);
+        fprintf(fcsx,"\t\t\t\t\tErrorLogBL.addLog(appglobal.curUserID,\"ERROR F%s-003 Unable to set history %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\t\t\t\tMessageBox.Show(\"ERROR F%s-002 Unable to set history %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\t\t\t}\n");
         fprintf(fcsx,"\t\t\t}\n");
-        fprintf(fcsx,"\t\t\thandler(this, e);\n");
+
+        fprintf(fcsx,"\t\t\tEventHandler<CloseFormEventArgs> handler = this.SaveComplete;\n");
+        fprintf(fcsx,"\t\t\tif(handler != null){\n");
+        fprintf(fcsx,"\t\t\t\tCloseFormEventArgs e = new CloseFormEventArgs();\n");
+        fprintf(fcsx,"\t\t\t\te.CompletedAction = (wasinsert?CloseFormEventArgs.FormAction.RecordSavedInsert:CloseFormEventArgs.FormAction.RecordSavedUpdate);\n");
+        fprintf(fcsx,"\t\t\t\thandler(this,e);\n");
+        fprintf(fcsx,"\t\t\t\tif(closeOnComplete){\n");
+        fprintf(fcsx,"\t\t\t\t\tthis.Close();\n");
+        fprintf(fcsx,"\t\t\t\t}\n");
+
+        fprintf(fcsx,"\t\t\t}\n");
         fprintf(fcsx,"\t\t}\n");
-        fprintf(fcsx,"\n");
         fprintf(fcsx,"\t}\n");
+
+
+        fprintf(fcsx,"\tprivate void loadViewsMenu(){\n");
+        fprintf(fcsx,"\t\tviewToolStripMenuItem.DropDownItems.Clear();\n");
+        fprintf(fcsx,"\t\tviewToolStripMenuItem.DropDownItems.Add(new ToolStripMenuItem(\"Standard\", null, ApplyView_Click,\"mnuVStandard\"));\n");
+        fprintf(fcsx,"\t\tUserViewBL b = new UserViewBL();\n");
+        fprintf(fcsx,"\t\tviews = b.getUserViewsL((int)Globals.FormViewTypes.Customer, appglobal.curUserID);\n");
+        fprintf(fcsx,"\t\tforeach(UserView view in views){\n");
+        fprintf(fcsx,"\t\t\tviewToolStripMenuItem.DropDownItems.Add(new ToolStripMenuItem(view.Description, null, ApplyView_Click, \"mnuV\" + view.UserViewID));\n");
+        fprintf(fcsx,"\t\t}\n");
+        fprintf(fcsx,"\tprivate void ApplyView_Click(object? sender, EventArgs e){\n");    
+        fprintf(fcsx,"\t\tif (sender != null){\n");
+        fprintf(fcsx,"\t\t\tToolStripItem i = (ToolStripItem)sender;\n");
+        fprintf(fcsx,"\t\t\tif (i.Text == \"Standard\")\n");
+        fprintf(fcsx,"\t\t\t\t{\n");
+        fprintf(fcsx,"\t\t\t\t\tselectedView = null;\n");
+        fprintf(fcsx,"\t\t\t\t\tdoSearch(txtSearch.Text.Trim());\n");
+        fprintf(fcsx,"\t\t\t\t}\n");
+        fprintf(fcsx,"\t\t\t\telse\n");
+        fprintf(fcsx,"\t\t\t\t{\n");
+        fprintf(fcsx,"\t\t\t\t\tint viewid = 0;\n");
+        fprintf(fcsx,"\t\t\t\t\tif (int.TryParse(i.Name.Replace(\"mnuV\",\"\"), out viewid))\n");
+        fprintf(fcsx,"\t\t\t\t\t{\n");
+        fprintf(fcsx,"\t\t\t\t\t\tif (viewid > 0)\n");
+        fprintf(fcsx,"\t\t\t\t\t\t{\n");
+        fprintf(fcsx,"\t\t\t\t\t\t\tUserView? v = views.FindLast(c => c.UserViewID == viewid);\n");
+        fprintf(fcsx,"\t\t\t\t\t\t\tif(v != null)\n");
+        fprintf(fcsx,"\t\t\t\t\t\t\t{\n");
+        fprintf(fcsx,"\t\t\t\t\t\t\t\tsetView(v);\n");
+        fprintf(fcsx,"\t\t\t\t\t\t\t\tdoSearch(txtSearch.Text.Trim());\n");
+        fprintf(fcsx,"\t\t\t\t\t\t\t}\n");
+        fprintf(fcsx,"\t\t\t\t\t\t}\n");
+        fprintf(fcsx,"\t\t\t\t\t}\n");
+        fprintf(fcsx,"\t\t\t\t}\n");
+        fprintf(fcsx,"\t\t}\n");
+        fprintf(fcsx,"\t}\n");
+
+        
+
+        fprintf(fcsx,"\tprivate void setView(UserView v)\n");
+        fprintf(fcsx,"\t{\n");
+        fprintf(fcsx,"\t\tselectedView = v;\n");
+        fprintf(fcsx,"\t\tUserViewFieldBL uvbl = new UserViewFieldBL();\n");
+        fprintf(fcsx,"\t\tselectedView.Fields = uvbl.getUserViewFields(selectedView.UserViewID);\n");
+        fprintf(fcsx,"\t\tselectedView.Initialised = false;\n");
+        fprintf(fcsx,"\t}\n");
+        fprintf(fcsx,"\tprivate void formatViewTable()\n");
+        fprintf(fcsx,"\t{\n");
+        fprintf(fcsx,"\t\tforeach(UserViewField field in selectedView.Fields)\n");
+        fprintf(fcsx,"\t\t{\n");
+        fprintf(fcsx,"\t\t\ttry\n");
+        fprintf(fcsx,"\t\t\t{\n");
+        fprintf(fcsx,"\t\t\t\tdataGridView1.Columns[field.FieldName].HeaderText = field.DisplayName;\n");
+        fprintf(fcsx,"\t\t\t}\n");
+        fprintf(fcsx,"\t\t\t\tcatch(Exception ex)\n");
+        fprintf(fcsx,"\t\t\t{\n");
+        fprintf(fcsx,"\t\t\t}\n");
+        fprintf(fcsx,"\t\t}\n");
+        fprintf(fcsx,"\t\tselectedView.Initialised = true;\n");
+        fprintf(fcsx,"\t}\n");
+        fprintf(fcsx,"\tprivate void doSearch(string srchString)\n");
+        fprintf(fcsx,"\t{\n");
+        fprintf(fcsx,"\t\t%sBL b = new %sBL();\n",argv[1],argv[1]);
+        fprintf(fcsx,"\t\tDataTable table;\n");
+        fprintf(fcsx,"\t\tif (selectedView != null)\n");
+        fprintf(fcsx,"\t\t{\n");
+        fprintf(fcsx,"\t\ttable = b.get%ssDT(srchString, selectedView.Fields);\n",argv[1]);
+        fprintf(fcsx,"\t\t}\n");
+        fprintf(fcsx,"\t\telse\n");
+        fprintf(fcsx,"\t\t{\n");
+        fprintf(fcsx,"\t\t\tstring strDefault = \"Description, Column2\";\n");
+        fprintf(fcsx,"\t\t\ttable = b.get%ssDT(srchString, strDefault);\n",argv[1]);
+        fprintf(fcsx,"\t\t}\n");
+        fprintf(fcsx,"\t\tdataGridView1.DataSource = table;\n");
+        fprintf(fcsx,"\t\tdataGridView1.AutoResizeColumns();\n");
+        fprintf(fcsx,"\t\tif (selectedView == null) { \n");
+        fprintf(fcsx,"\t\t\tdataGridView1.Columns[\"Column2\"].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;\n");
+        fprintf(fcsx,"\t\t}\n");
+        fprintf(fcsx,"\t\telse\n");
+        fprintf(fcsx,"\t\t{\n");
+        fprintf(fcsx,"\t\t\tif (selectedView.Initialised == false)\n");
+        fprintf(fcsx,"\t\t\t{\n");
+        fprintf(fcsx,"\t\t\tformatViewTable();\n");
+        fprintf(fcsx,"\t\t\t}\n");
+        fprintf(fcsx,"\t\t}\n");
+        fprintf(fcsx,"\t\tdataGridView1.Columns[\"%sID\"].Visible = false;\n",argv[1]);
+        fprintf(fcsx,"\t}\n");
+
+
         fclose(fcsx);
     }
 
@@ -908,7 +1281,7 @@ int main(int argc, char *argv[]){
         fprintf(fcsu,"\t\t\tDALGlobal.connectionString = UTGlobal.connectionstring;\n");
         fprintf(fcsu,"\t\t\t%sBL b = new %sBL();\n",argv[1],argv[1]);
         fprintf(fcsu,"\t\t\t%s o = new %s();\n",argv[1],argv[1]);
-        fprintf(fcsu,"\t\t\to = b.load(11111,o,testUserID);\n");
+        fprintf(fcsu,"\t\t\to = b.load(11111,o);\n");
         fprintf(fcsu,"\t\t\tif(o.LastError.Length>0){\n");
         fprintf(fcsu,"\t\t\t\tAssert.Fail(o.LastError);\n");
         fprintf(fcsu,"\t\t\t}else{\n");
@@ -921,7 +1294,7 @@ int main(int argc, char *argv[]){
         fprintf(fcsu,"\t\t\t%sBL b = new %sBL();\n",argv[1],argv[1]);
         fprintf(fcsu,"\t\t\t%s o = new %s();\n",argv[1],argv[1]);
         fprintf(fcsu,"\t\t\t/// add some data?\n");
-        fprintf(fcsu,"\t\t\to = b.load(11111,o,testUserID);\n");
+        fprintf(fcsu,"\t\t\to = b.load(11111,o);\n");
         fprintf(fcsu,"\t\t\tif(o.LastError.Length>0){\n");
         fprintf(fcsu,"\t\t\t\tAssert.Fail(o.LastError);\n");
         fprintf(fcsu,"\t\t\t}else{\n");
