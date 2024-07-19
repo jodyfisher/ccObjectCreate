@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-/* build =   gcc -o fwObjmaker fwObjmaker.c*/
+/* build =   gcc -o ccObjMaker ccObjMaker.c*/
 /*  test  */
 struct dbItem
 {
@@ -2100,7 +2100,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
         fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
         fprintf(fcs,"\t\tstring strFields = \"\";\n");
-        fprintf(fcs,"\t\tstring strIncKey = \"\";\n");
+        fprintf(fcs,"\t\tbool IncKey = false;\n");
         fprintf(fcs,"\t\tstring strExtraJoins = \"\";\n");
 
         fprintf(fcs,"\t\tif(fields.Count>0){\n");
@@ -2179,13 +2179,14 @@ int main(int argc, char *argv[]){
                 posss ++;
             }
         }
-        fprintf(fcs,"\t\t\tsql += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
-        fprintf(fcs,"\t\t}\n");
-
-        fprintf(fcs,"\t\tif(SortBy.Length>0){\n");
+        //fprintf(fcs,"\t\t\tsql += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
         fprintf(fcs,"\t\t\tsortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
         fprintf(fcs,"\t\t}\n");
-        fprintf(fcs,"\t\tsql += strIncKey + \"%sID \" + strFields + \" \";\n", argv[1]);
+
+        //fprintf(fcs,"\t\tif(SortBy.Length>0){\n");
+        //fprintf(fcs,"\t\t\tsortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
+        //fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\tsql += \"%sID \" + strFields + \" \";\n", argv[1]);
         fprintf(fcs,"\t\tsql += \" FROM tbl%s  \";\n", argv[1]);
         fprintf(fcs,"\t\tsql += \" \" + strExtraJoins + \" \";\n");
         fprintf(fcs,"\t\tsql += \" WHERE tbl%s.RecordDeleted=0  \";\n",argv[1]);
@@ -2671,7 +2672,7 @@ int main(int argc, char *argv[]){
 
 
 
-    //// create the helper cs form procedures
+    //// create the cs test units
 
     char filenamecsu[128];
     snprintf(filenamecsu, sizeof filenamecsu, "%s.unit.cs",argv[1]);
@@ -2751,6 +2752,182 @@ int main(int argc, char *argv[]){
         fclose(fcsu);
     }
 
+
+
+
+
+
+
+
+
+
+    //// create cpp .h 
+
+    char filenamecpph[128];
+    snprintf(filenamecpph, sizeof filenamecpph, "%s.h",argv[1]);
+
+
+    FILE *fcpph;
+    fcpph = fopen(filenamecpph,"w");
+
+    count = 0;
+
+    if(fcpph!=NULL){
+         
+        fprintf(fcpph,"#include <string>\n");
+        fprintf(fcpph,"\n\nclass %s{\n",argv[1]);
+
+        fprintf(fcpph,"\tpublic:\n");
+        fprintf(fcpph,"\t\tstd::string LastError = \"\";\n");
+        fprintf(fcpph,"\t\tint %sID;\n",argv[1]);
+        count = 0;
+        compresult = 0;
+        tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
+        for(count==0;count<totRows;count++){
+            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date, 5=time, 6=varbinary
+            strcpy(teststring,"INT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
+            strcpy(teststring,"int");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            } 
+            strcpy(teststring,"TINYINT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
+
+            strcpy(teststring,"DECIMAL(10,2)");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=3;
+            }
+            strcpy(teststring,"DATE");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
+            }        
+            strcpy(teststring,"DATETIME");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
+            }
+            strcpy(teststring,"TIME");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=5;
+            }
+            
+            strcpy(teststring,"VARBINARY");
+            compresult = strncmp(types[count], teststring,9);
+            if(compresult==0){
+                tp=6;
+            }
+            
+
+            if(tp==0){
+                fprintf(fcpph,"\t\tint %s;\n", fields[count]);
+            }else if(tp==1){
+                fprintf(fcpph,"\t\tfloat %s;\n", fields[count]);
+            }else if(tp==2){
+                fprintf(fcpph,"\t\tstd::string %s = \"\";\n", fields[count]);
+            }else if(tp==3){
+                fprintf(fcpph,"\t\tdouble _%s;\n", fields[count]);
+            }else if(tp==4){
+                fprintf(fcpph,"\t\ttm %s;\n", fields[count]);
+            }else if(tp==5){
+                fprintf(fcpph,"\t\ttm %s;\n", fields[count]);
+            }else if(tp==6){
+                fprintf(fcpph,"\t\tstd::string %s = \"\";\n", fields[count]);
+            }else{
+                fprintf(fcpph,"\t\tint %s;\n", fields[count]);
+            }
+        }
+        fprintf(fcpph,"\t\tbool RecordDeleted;\n");
+        fprintf(fcpph,"\t\tint RecordLockByUserID;\n");
+        fprintf(fcpph,"\t\ttm RecordLockTime;\n");
+        fprintf(fcpph,"\t\ttm dateCreated;\n");
+        fprintf(fcpph,"\t\ttm dateModified;\n");
+        fprintf(fcpph,"\t\tint ModifiedByUserID;\n");
+        /*
+        fprintf(fcpph,"\n\tpublic int %sID {get=>_%sID; set=> _%sID=value;}\n",argv[1],argv[1],argv[1]);
+        fprintf(fcpph,"\n\tpublic string LastError {get=>_LastError; set=> _LastError=value;}\n");
+        count = 0;
+        compresult = 0;
+        tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
+        for(count==0;count<totRows;count++){
+            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
+            strcpy(teststring,"INT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
+            strcpy(teststring,"TINYINT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
+            strcpy(teststring,"int");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            } 
+
+            strcpy(teststring,"DECIMAL(10,2)");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=3;
+            }
+            strcpy(teststring,"DATE");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
+            }        
+            strcpy(teststring,"DATETIME");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
+            }
+            strcpy(teststring,"TIME");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=5;
+            }
+
+            if(tp==0){
+                fprintf(fcpph,"\tpublic int  %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
+            }else if(tp==1){
+                fprintf(fcpph,"\tpublic float %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
+            }else if(tp==2){
+                fprintf(fcpph,"\tpublic string %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
+                
+            }else if(tp==3){
+                fprintf(fcpph,"\tpublic double %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
+            }else if(tp==4){
+                fprintf(fcpph,"\tpublic DateTime %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
+            }else if(tp==5){
+                fprintf(fcpph,"\tpublic DateTime %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
+            }else{
+                fprintf(fcpph,"\tpublic int %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
+            }
+            
+        }
+        fprintf(fcpph,"\tpublic bool RecordDeleted {get=>_RecordDeleted; set=> _RecordDeleted=value;}\n");
+        fprintf(fcpph,"\tpublic int RecordLockByUserID {get=>_RecordLockByUserID; set=> _RecordLockByUserID=value;}\n");
+        fprintf(fcpph,"\tpublic DateTime RecordLockTime {get=>_RecordLockTime; set=> _RecordLockTime=value;}\n");
+        fprintf(fcpph,"\tpublic DateTime dateCreated {get=>_dateCreated; set=> _dateCreated=value;}\n");
+        fprintf(fcpph,"\tpublic DateTime dateModified {get=>_dateModified; set=> _dateModified=value;}\n");
+        fprintf(fcpph,"\tpublic int ModifiedByUserID {get=>_ModifiedByUserID; set=> _ModifiedByUserID=value;}\n");
+        */
+        fprintf(fcpph,"};\n\n");
+        
+        
+        fclose(fcpph);
+    }
 
 
 /*
