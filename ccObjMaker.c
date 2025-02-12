@@ -1150,16 +1150,16 @@ int main(int argc, char *argv[]){
 
 
 
-        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString, List<UserViewField> fields,string SortBy, string SortDirection",argv[1]);
+        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString,List<SearchField> filters, List<UserViewField> fields,string SortBy, string SortDirection",argv[1]);
         if(hasBIN==1){
             fprintf(fcs,", string key");
         }
-        fprintf(fcs,"){\n");
+        fprintf(fcs,",string whereString=\"\"){\n");
         fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
         fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
-        fprintf(fcs,"\t\t\tdt = get%ssDT(con,srchString, fields, SortBy, SortDirection",argv[1]);
+        fprintf(fcs,"\t\t\tdt = get%ssDT(con,srchString,filters, fields, SortBy, SortDirection, whereString",argv[1]);
         if(hasBIN==1){
             fprintf(fcs,",key");
         }
@@ -1169,17 +1169,17 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\treturn dt;\n");
         fprintf(fcs,"\t}\n");
                     
-        fprintf(fcs,"\tprivate DataTable get%ssDT(MySqlConnection con,string srchString, List<UserViewField> fields, string SortBy, string SortDirection", argv[1]);
+        fprintf(fcs,"\tprivate DataTable get%ssDT(MySqlConnection con,string srchString,List<SearchField> filters, List<UserViewField> fields, string SortBy, string SortDirection", argv[1]);
         if(hasBIN==1){
             fprintf(fcs,", string key");
         }
-        fprintf(fcs,"){\n");
+        fprintf(fcs,",string whereString=\"\"){\n");
         
         fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
         fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
         fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
         fprintf(fcs,"\t\tstring strFields = \"\";\n");
-        fprintf(fcs,"\t\tstring strIncKey = \"\";\n");
+        fprintf(fcs,"\t\tbool incKey = false;\n");
         fprintf(fcs,"\t\tstring strExtraJoins = \"\";\n");
 
         fprintf(fcs,"\t\tif(fields.Count>0){\n");
@@ -1188,7 +1188,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t\t\tstrFields += \",(SELECT UUID()) as tmpGUID \";\n");
         fprintf(fcs,"\t\t\t\t}\n");
         count = 0;
-        int posss = 0;
+        posss = 0;
         for(count==0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
@@ -1198,9 +1198,7 @@ int main(int argc, char *argv[]){
                 fprintf(fcs,"\t\t\t\telse if(f.FieldName==\"%s\"){\n",fields[count]);
                 fprintf(fcs,"\t\t\t\t\tstrFields += \", getEDataHKDF(%s,'\" + key + \"',EIV,ES) as %s\";\n",fields[count],fields[count]);
                 if(hasBIN==1){
-                    fprintf(fcs,"\t\t\t\t\tif(strIncKey.Length>0 && key.Length>0){\n");
-                    fprintf(fcs,"\t\t\t\t\t\tstrIncKey += \" @key:='\" + key + \"' as kkkey,\";\n");
-                    fprintf(fcs,"\t\t\t\t\t}\n");
+                    fprintf(fcs,"\t\t\t\t\tincKey=true;\n");
                 }
                 fprintf(fcs,"\t\t\t\t}\n");
                 posss ++;
@@ -1273,20 +1271,100 @@ int main(int argc, char *argv[]){
                     posss ++;
                 }
             }
-        fprintf(fcs,"\t\t\tsortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
+
+
+
+        fprintf(fcs,"\t\t\t}\n");
+        fprintf(fcs,"\t\t\tstring wString=\"\";\n");
+        fprintf(fcs,"\t\t\tstring middle=\"\";\n");
+        fprintf(fcs,"\t\t\tforeach(SearchField f in filters){\n");
+        fprintf(fcs,"\t\t\t\tif(f.FieldName==\"xxx\"){\n");
+        fprintf(fcs,"\t\t\t\t\twString += \"examplestringcolumn {f.EQUALS} @{f.FieldName} \";\n");
+        fprintf(fcs,"\t\t\t\t\tmiddle= \" AND \";\n");
+        fprintf(fcs,"\t\t\t\t}\n");
+        count = 0;
+        int posss = 0;
+        for(count==0;count<totRows;count++){
+            strcpy(teststring,"VARBINARY");
+            compresult = strncmp(types[count], teststring,9);
+            tp=2;
+            if(compresult==0){
+                tp=6;
+                fprintf(fcs,"\t\t\t\telse if(f.FieldName==\"%s\"){\n",fields[count]);
+                fprintf(fcs,"\t\t\t\t\twString += \" getEDataHKDF(%s,@key,EIV,ES)  {f.EQUALS} @{f.FieldName} \";\n",fields[count]);
+                if(hasBIN==1){
+                    fprintf(fcs,"\t\t\t\t\tincKey=true;\n");
+                }
+                fprintf(fcs,"\t\t\t\t\tmiddle=\" AND \";\n");
+                fprintf(fcs,"\t\t\t\t}\n");
+                posss ++;
+            }
+        }
+
+        fprintf(fcs,"\t\t\t\telse{\n");
+        fprintf(fcs,"\t\t\t\t\tstring fname= \"tbl%s.\" + f.FieldName;\n",argv[1]);
+        fprintf(fcs,"\t\t\t\t\tif(f.FieldType==typeof(int) || f.FieldType==typeof(double)){\n");
+        fprintf(fcs,"\t\t\t\t\t\tif(f.SearchType==1){\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString = middle + $\"({fname} >= @{f.FieldName} AND {fname} <= @{f.FieldName}2) \";\n");
+        fprintf(fcs,"\t\t\t\t\t\t}else{\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"{fname}=@{f.FieldName}\";\n");
+        fprintf(fcs,"\t\t\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t\t\t}else if(f.FieldType== typeof(DateTime)){\n");
+        fprintf(fcs,"\t\t\t\t\t\tif(f.dateValue2 > DateTime.MinValue){\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"({fname} >= @{f.FieldName}1 AND {fname} <= @{f.FieldName}2) \";\n");
+        fprintf(fcs,"\t\t\t\t\t\t}else{\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"({fname} = @{f.FieldName}1) \";\n");
+        fprintf(fcs,"\t\t\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t\t\t}else{\n");
+        fprintf(fcs,"\t\t\t\t\t\twString += middle + $\"{fname} {f.EQUALS} @{f.FieldName} \";\n");
+        fprintf(fcs,"\t\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t\t\tmiddle = \" AND \"; \n");
+        fprintf(fcs,"\t\t\t}\n");
         fprintf(fcs,"\t\t}\n");
-        fprintf(fcs,"\t\tsql += strIncKey + \"%sID \" + strFields + \" \";\n", argv[1]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+        fprintf(fcs,"\t\t\tsortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
+        fprintf(fcs,"\t\tsql += \"%sID \" + strFields + \" \";\n", argv[1]);
         fprintf(fcs,"\t\tsql += \" FROM tbl%s  \";\n", argv[1]);
         fprintf(fcs,"\t\tsql += \" \" + strExtraJoins + \" \";\n");
         fprintf(fcs,"\t\tsql += \" WHERE tbl%s.RecordDeleted=0  \";\n",argv[1]);
         
         fprintf(fcs,"\t\tif(srchString.Length>0){\n");
-        fprintf(fcs,"\t\t\tsql += \" AND Description LIKE '%%\" + srchString + \"%%'\";\n");
+        fprintf(fcs,"\t\t\tsql += \" AND Description LIKE @srchString \";\n");
         fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\tif(wString.Length>0){\n");
+        fprintf(fcs,"\t\t\tsql += $\" AND ({wString})\";\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\tif(whereString.Length>0){\n");
+        fprintf(fcs,"\t\t\tsql += $\" AND ({whereString})\";\n");
+        fprintf(fcs,"\t\t}\n");
+
         fprintf(fcs,"\t\tsql += \" \" + sortString +  \" \";\n");
 
         fprintf(fcs,"\t\ttry{\n");
+        fprintf(fcs,"\t\t\tif(incKey){\n");
+
+        fprintf(fcs,"\t\t\t\tusing(MySqlCommand cmd = new MySqlCommand(\"SET @key:='\" + key + \"'\",con)){\n");
+        fprintf(fcs,"\t\t\t\t\tcmd.ExecuteNonQuery();\n");
+        fprintf(fcs,"\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t}\n");
+
         fprintf(fcs,"\t\t\tusing(MySqlDataAdapter da = new MySqlDataAdapter(sql,con)){\n");
+        fprintf(fcs,"\t\t\tif(srchString.Length > 0){\n");
+        fprintf(fcs,"\t\t\t\tda.SelectCommand.Parameters.AddWithValue(\"@srchString\",$\"%%{srchString}%%\");\n");
+        fprintf(fcs,"\t\t\t}\n");
+        fprintf(fcs,"\t\t\tda.SelectCommand = DALGlobal.processSearchFieldFilters(da.SelectCommand,filters);\n");
         fprintf(fcs,"\t\t\t\tdt = new DataTable();\n");
         fprintf(fcs,"\t\t\t\tda.Fill(dt);\n");
         fprintf(fcs,"\t\t\t\t_LastErrorD = \"\";\n");
@@ -1444,11 +1522,11 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\treturn dt; \n");
         fprintf(fcs,"\t}\n\n");
         */
-        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString,int UserViewID, string SortBy, string SortDirection",argv[1]);
+        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString,List<SearchField>filters, int UserViewID, string SortBy, string SortDirection",argv[1]);
         if(hasBIN==1){
             fprintf(fcs,",string key");
         }
-        fprintf(fcs,"){\n");
+        fprintf(fcs,",whereString=\"\"){\n");
         fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
         fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
         fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
@@ -1490,13 +1568,13 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t\tdt = d.get%ssDT(srchString, s,SortBy, SortDirection); \n",argv[1]);
         */
 
-        fprintf(fcs,"\t\t\tdt = d.get%ssDT(srchString,o,SortBy, SortDirection); \n",argv[1]);
+        fprintf(fcs,"\t\t\tdt = d.get%ssDT(srchString,filters,o,SortBy, SortDirection); \n",argv[1]);
         fprintf(fcs,"\t\t\t_LastErrorB = d.LastErrorD; \n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn dt; \n");
         fprintf(fcs,"\t}\n\n");
         
-        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString,List<UserViewField> fields,string SortBy, string SortDirection){\n",argv[1]);
+        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString, List<SearchField> filters,List<UserViewField> fields,string SortBy, string SortDirection){\n",argv[1]);
         fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
         fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
         fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
@@ -2066,30 +2144,30 @@ int main(int argc, char *argv[]){
 
 
 
-        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString, List<UserViewField> fields,string SortBy, string SortDirection",argv[1]);
+        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString, List<SearchField> filters, List<UserViewField> fields,string SortBy, string SortDirection",argv[1]);
         if(hasBIN==1){
             fprintf(fcs,", string key");
         }
-        fprintf(fcs,"){\n");
+        fprintf(fcs,",string whereString=\"\"){\n");
         fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
         fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (SqlConnection con = new SqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
-        fprintf(fcs,"\t\t\tdt = get%ssDT(con,srchString, fields, SortBy, SortDirection",argv[1]);
+        fprintf(fcs,"\t\t\tdt = get%ssDT(con,srchString,filters, fields, SortBy, SortDirection",argv[1]);
         if(hasBIN==1){
             fprintf(fcs,",key = \"\"");
         }
-        fprintf(fcs,");\n");
+        fprintf(fcs,",whereString);\n");
         fprintf(fcs,"\t\t\tcon.Close();\n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn dt;\n");
         fprintf(fcs,"\t}\n");
                     
-        fprintf(fcs,"\tprivate DataTable get%ssDT(SqlConnection con,string srchString, List<UserViewField> fields, string SortBy, string SortDirection", argv[1]);
+        fprintf(fcs,"\tprivate DataTable get%ssDT(SqlConnection con,string srchString,List<SearchField> filters, List<UserViewField> fields, string SortBy, string SortDirection", argv[1]);
         if(hasBIN==1){
             fprintf(fcs,", string key");
         }
-        fprintf(fcs,"){\n");
+        fprintf(fcs,",string whereString=\"\"){\n");
         if(hasBIN){
             fprintf(fcs,"\t\tusing(SqlCommand cmdk = new SqlCommand(\"OpenKeys\",con)){\n");
             fprintf(fcs,"\t\t\tcmdk.ExecuteNonQuery();\n");
@@ -2186,10 +2264,73 @@ int main(int argc, char *argv[]){
         //fprintf(fcs,"\t\tif(SortBy.Length>0){\n");
         //fprintf(fcs,"\t\t\tsortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
         //fprintf(fcs,"\t\t}\n");
+        
+
+        fprintf(fcs,"\t\t\tstring wString=\"\";\n");
+        fprintf(fcs,"\t\t\tstring middle=\"\";\n");
+        fprintf(fcs,"\t\t\tforeach(SearchField f in filters){\n");
+        fprintf(fcs,"\t\t\t\tif(f.FieldName==\"xxx\"){\n");
+        fprintf(fcs,"\t\t\t\t\twString += \"examplestringcolumn {f.EQUALS} @{f.FieldName} \";\n");
+        fprintf(fcs,"\t\t\t\t\tmiddle= \" AND \";\n");
+        fprintf(fcs,"\t\t\t\t}\n");
+        count = 0;
+        posss = 0;
+        for(count==0;count<totRows;count++){
+            strcpy(teststring,"VARBINARY");
+            compresult = strncmp(types[count], teststring,9);
+            tp=2;
+            if(compresult==0){
+                tp=6;
+                fprintf(fcs,"\t\t\t\telse if(f.FieldName==\"%s\"){\n",fields[count]);
+                fprintf(fcs,"\t\t\t\t\tstrFields += \" getEDataHKDF(%s,@key,EIV,ES)  {f.EQUALS} @{f.FieldName} \";\n",fields[count]);
+                if(hasBIN==1){
+                    fprintf(fcs,"\t\t\t\t\tincKey=true;\n");
+                }
+                fprintf(fcs,"\t\t\t\t}\n");
+                posss ++;
+            }
+        }
+
+        fprintf(fcs,"\t\t\t\telse{\n");
+        fprintf(fcs,"\t\t\t\t\tstring fname= \"tbl.\" + f.FieldName;\n");
+        fprintf(fcs,"\t\t\t\t\tif(f.FieldType==typeof(int) || f.FieldType==typeof(double)){\n");
+        fprintf(fcs,"\t\t\t\t\t\tif(f.SearchType==1){\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString = middle + $\"({fname} >= @{f.FieldName} AND {fname} <= @{f.FieldName}2) \";\n");
+        fprintf(fcs,"\t\t\t\t\t\t}else{\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"{fname}=@{f.FieldName}\";\n");
+        fprintf(fcs,"\t\t\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t\t\t}else if(f.FieldType== typeof(DateTime)){\n");
+        fprintf(fcs,"\t\t\t\t\t\tif(f.dateValue2 > DateTime.MinValue){\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"({fname} >= @{f.FieldName}1 AND {fname} <= @{f.FieldName}2) \";\n");
+        fprintf(fcs,"\t\t\t\t\t\t}else{\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"({fname} = @{f.FieldName}1) \";\n");
+        fprintf(fcs,"\t\t\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t\t\t}else{\n");
+        fprintf(fcs,"\t\t\t\t\t\twString += middle + $\"{fname} {f.EQUALS} @{f.FieldName} \";\n");
+        fprintf(fcs,"\t\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t\t\tmiddle = \" AND \"; \n");
+        fprintf(fcs,"\t\t\t}\n");
+        fprintf(fcs,"\t\t}\n");
+        
+        
+        
+
         fprintf(fcs,"\t\tsql += \"%sID \" + strFields + \" \";\n", argv[1]);
         fprintf(fcs,"\t\tsql += \" FROM tbl%s  \";\n", argv[1]);
         fprintf(fcs,"\t\tsql += \" \" + strExtraJoins + \" \";\n");
         fprintf(fcs,"\t\tsql += \" WHERE tbl%s.RecordDeleted=0  \";\n",argv[1]);
+        
+        
+        fprintf(fcs,"\t\tif(srchString.Length>0){\n");
+        fprintf(fcs,"\t\t\tsql += \" AND Description LIKE @srchString \";\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\tif(wString.Length>0){\n");
+        fprintf(fcs,"\t\t\tsql += $\" AND ({wString})\";\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\t\tif(whereString.Length>0){\n");
+        fprintf(fcs,"\t\t\tsql += $\" AND ({whereString})\";\n");
+        fprintf(fcs,"\t\t}\n");
+        
         fprintf(fcs,"\t\tif(srchString.Length>0){\n");
         fprintf(fcs,"\t\t\tsql += \" AND Description LIKE '%%\" + srchString + \"%%'\";\n");
         fprintf(fcs,"\t\t}\n");
@@ -2202,6 +2343,14 @@ int main(int argc, char *argv[]){
             fprintf(fcs,"\t\t}\n");
         } 
         fprintf(fcs,"\t\t\tusing(SqlDataAdapter da = new SqlDataAdapter(sql,con)){\n");
+        
+        fprintf(fcs,"\t\t\tif(srchString.Length > 0){\n");
+        fprintf(fcs,"\t\t\t\tda.SelectCommand.Parameters.AddWithValue(\"@srchString\",$\"%%{srchString}%%\");\n");
+        fprintf(fcs,"\t\t\t}\n");
+        fprintf(fcs,"\t\t\tda.SelectCommand = DALGlobal.processSearchFieldFilters(da.SelectCommand,filters);\n");
+        
+        
+        
         fprintf(fcs,"\t\t\t\tdt = new DataTable();\n");
         fprintf(fcs,"\t\t\t\tda.Fill(dt);\n");
         fprintf(fcs,"\t\t\t\t_LastErrorD = \"\";\n");
