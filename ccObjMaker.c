@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <sys/types.h>
 /* build =   gcc -o ccObjMaker ccObjMaker.c*/
 /*  test  */
 struct dbItem
@@ -26,7 +28,7 @@ void replaceSubstr(char *line, const char *search, const char *replace)
 }
 
 void addSpacesToCapitals(char *line){
-    char sp[200] = {0};
+    char sp[256] = {0};
     int i,x;
     i = 0;
     x = 0;
@@ -86,19 +88,79 @@ void getDescriptionField(char tblname[],char * ret){
         strcpy(res,"FormName");
     }        
 
-    memmove(ret, res,strlen(res));
-    memcpy(ret, res, strlen(res));
+    strcpy(ret,res);
 }
 
 
+
+/* Keep SQL-to-model classification consistent across all generated sections. */
+static int fieldType(const char *sqlType)
+{
+    char base[128]; size_t i = 0;
+    while (sqlType[i] && sqlType[i] != '(' && !isspace((unsigned char)sqlType[i]) && i < sizeof(base)-1) {
+        base[i] = (char)toupper((unsigned char)sqlType[i]); i++;
+    }
+    base[i] = '\0';
+    if (!strcmp(base,"INT") || !strcmp(base,"INTEGER") || !strcmp(base,"TINYINT")
+        || !strcmp(base,"SMALLINT") || !strcmp(base,"MEDIUMINT")) return 0;
+    if (!strcmp(base,"DECIMAL") || !strcmp(base,"NUMERIC") || !strcmp(base,"DOUBLE")
+        || !strcmp(base,"FLOAT") || !strcmp(base,"REAL")) return 3;
+    if (!strcmp(base,"DATE") || !strcmp(base,"DATETIME") || !strcmp(base,"TIMESTAMP")) return 4;
+    if (!strcmp(base,"TIME")) return 5;
+    if (!strcmp(base,"VARBINARY")) return 6;
+    return 2;
+}
+
+static char *trim(char *text)
+{
+    while (isspace((unsigned char)*text)) text++;
+    size_t n = strlen(text);
+    while (n && isspace((unsigned char)text[n-1])) text[--n] = '\0';
+    return text;
+}
+
+static int identifier(const char *name)
+{
+    static const char *keywords[] = {
+        "abstract","as","base","bool","break","byte","case","catch","char","checked",
+        "class","const","continue","decimal","default","delegate","do","double","else",
+        "enum","event","explicit","extern","false","finally","fixed","float","for",
+        "foreach","goto","if","implicit","in","int","interface","internal","is",
+        "lock","long","namespace","new","null","object","operator","out","override",
+        "params","private","protected","public","readonly","ref","return","sbyte",
+        "sealed","short","sizeof","stackalloc","static","string","struct","switch",
+        "this","throw","true","try","typeof","uint","ulong","unchecked","unsafe",
+        "ushort","using","virtual","void","volatile","while"
+    };
+    for (size_t i=0;i<sizeof(keywords)/sizeof(keywords[0]);i++)
+        if (!strcmp(name,keywords[i])) return 0;
+    if (!(isalpha((unsigned char)*name) || *name == '_')) return 0;
+    for (const char *ch = name+1; *ch; ch++)
+        if (!(isalnum((unsigned char)*ch) || *ch == '_')) return 0;
+    return 1;
+}
+
+static void inputError(FILE *file, char *line, size_t number, const char *message)
+{
+    fprintf(stderr,"Input line %zu: %s\n",number,message);
+    free(line); fclose(file); exit(EXIT_FAILURE);
+}
+
+static void writeMySqlKey(FILE *output)
+{
+    fprintf(output,"\t\t\tusing (MySqlCommand keyCommand = new MySqlCommand(\"SET @key = @encryptionKey\", con)){\n");
+    fprintf(output,"\t\t\t\tkeyCommand.Parameters.AddWithValue(\"@encryptionKey\", key);\n");
+    fprintf(output,"\t\t\t\tkeyCommand.ExecuteNonQuery();\n\t\t\t}\n");
+}
+
 int main(int argc, char *argv[]){
-	if(argc < 2){
+	if(argc < 3){
 		printf("too few arguments\nUsage: %s objectName csvfileforFields\n",argv[0]);
 		printf("csv file format is: \n a) no headers\n b) fieldname; type and size definition; anything extra \n");
 		printf("EG: carType; INT; NULL DEFAULT 0;1\n");
 		printf("note the primary key/autoincrement will be added automatically so do not include\n");
 		printf("the very last column is used to define if something is a text field or lookup.  0=text field, 1=select, 2=yes no\n");
-        printf("if using python add the word python as the last argument\n");
+        return EXIT_FAILURE;
 	}
     /*int runpython = 0;
 	int runsqlite = 0;
@@ -110,82 +172,51 @@ int main(int argc, char *argv[]){
 		}
     }*/
 
-	char fields[128][128];
-	char types[128][128];
-	char extra[128][128];
-	char feditor[128][128]; /// 0 is text box, 1 is select, 2 is checkbox
-	char lookuptable[128][128]; /// 0 is text box, 1 is select, 2 is checkbox
 
-	FILE *file = fopen(argv[2],"r");
-	char *line = NULL;
-	size_t len = 0;
-	size_t read;
-
-    /// these variables are used for doing the split on line
-	int charcount = 0;
-	int charcountforCol = 0;
-	char ch;
-	int	curCol = 0;
-	int totRows = 0;
-    //	maxlencol = 128;
-    int compresult = 0;
-    int tp = 115;
+    if (strlen(argv[1]) >= 100 || !identifier(argv[1])) {
+        fprintf(stderr,"Object name must be an identifier shorter than 100 characters.\n");
+        return EXIT_FAILURE;
+    }
+    char fields[128][128] = {{0}}, types[128][128] = {{0}}, extra[128][128] = {{0}};
+    char feditor[128][128] = {{0}}, lookuptable[128][128] = {{0}};
+    FILE *file = fopen(argv[2],"r");
+    if (!file) { perror(argv[2]); return EXIT_FAILURE; }
+    char *line = NULL; size_t len = 0, number = 0; ssize_t read;
+    int totRows = 0, compresult = 0, tp = 2, posss = 0;
     char teststring[128];
-	char comma = ' ';
+    while ((read = getline(&line, &len, file)) != -1) {
+        number++;
+        char *part = trim(line);
+        if (!*part) continue;
+        if (totRows >= 128) inputError(file,line,number,"128 fields maximum.");
+        char *columns[5] = {fields[totRows],types[totRows],extra[totRows],feditor[totRows],lookuptable[totRows]};
+        int column = 0;
+        while (part) {
+            if (column >= 5) inputError(file,line,number,"Expected at most five semicolon-separated columns.");
+            char *separator = strchr(part,';');
+            if (separator) *separator = '\0';
+            char *value = trim(part);
+            if (strlen(value) >= 128) inputError(file,line,number,"Column exceeds 127 characters.");
+            strcpy(columns[column++],value);
+            part = separator ? separator+1 : NULL;
+        }
+        if (column < 3 || !identifier(fields[totRows]) || !*types[totRows])
+            inputError(file,line,number,"Expected field name; SQL type; extra definition (optional empty value).");
+        for (int i=0;i<totRows;i++)
+            if (!strcmp(fields[i],fields[totRows])) inputError(file,line,number,"Duplicate field name.");
+        char id[128]; snprintf(id,sizeof(id),"%sID",argv[1]);
+        const char *reserved[] = {id,"RecordDeleted","RecordLockByUserID","RecordLockTime","dateCreated","dateModified","ModifiedByUserID","LastError","EIV","ES","EVersion"};
+        for (size_t i=0;i<sizeof(reserved)/sizeof(reserved[0]);i++)
+            if (!strcmp(fields[totRows],reserved[i])) inputError(file,line,number,"Field is generated automatically; do not include it.");
+        for (char *ch=types[totRows]; *ch; ch++) *ch=(char)toupper((unsigned char)*ch);
+        if (!*feditor[totRows]) strcpy(feditor[totRows],"0");
+        totRows++;
+    }
+    if (ferror(file)) inputError(file,line,number,"Unable to read input file.");
+    free(line); fclose(file);
+    if (!totRows) { fprintf(stderr,"Input contains no fields.\n"); return EXIT_FAILURE; }
 
-    int posss = 0;
-	if(file==NULL){
-		exit(EXIT_FAILURE);
-	}	
-	while ((read = getline(&line, &len, file)) != -1){
-		curCol = 0;
-		charcountforCol = 0;
-		charcount = 0;
-
-    //		printf("got line of length: %zu :\n",read);
-    //		printf("CREATE TABLE IF NOT EXISTS tbl%s(\n",argv[1]);
-    //		printf("	%sID	INT NOT NULL AUTO_INCREMENT,\n", argv[1]);
-		ch = line[charcount];
-		while(ch !='\n' && charcount != len){
-			if(totRows>128){
-				printf("too many columns 128 maximum");
-				exit(EXIT_FAILURE);
-			}
-    //			printf("%i",charcount);
-			if(ch != ';'){
-				if(curCol==0){
-					fields[totRows][charcountforCol]=ch;
-                    feditor[totRows][0] = 0;
-				}else if(curCol==1){
-					types[totRows][charcountforCol]=ch;
-				}else if(curCol==2){
-					extra[totRows][charcountforCol]=ch;
-				}else if(curCol==3){
-					feditor[totRows][charcountforCol]=ch;
-				}else if(curCol==4){
-					lookuptable[totRows][charcountforCol]=ch;
-				}
-				charcountforCol++;
-				
-			}else{
-				if(curCol==0){
-					printf("%s\n",fields[totRows]);
-				}
-				curCol++;
-				charcountforCol = 0;
-			}
-			charcount++;
-			ch=line[charcount];
-		}
-		
-		totRows++;
-	}
-
-	fclose(file);
-	if(line)
-		free(line);
-
-    char ObjectName[128];
+    char ObjectName[256];
     strcpy(ObjectName,argv[1]);
     //int olen = strlen(ObjectName);
     //ObjectName[olen] = '\0';
@@ -216,7 +247,7 @@ int main(int argc, char *argv[]){
         fprintf(fsql,"\nDELIMITER ; \n\n");
         fprintf(fsql,"CREATE TABLE IF NOT EXISTS tbl%s(\n",argv[1]);
         fprintf(fsql,"\t%sID\t\tINT NOT NULL AUTO_INCREMENT,\n",argv[1]);
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             fprintf(fsql,"\t%s\t\t%s %s,\n",fields[count],types[count],extra[count]);
             
             strcpy(teststring,"VARBINARY");
@@ -244,10 +275,10 @@ int main(int argc, char *argv[]){
     //  sp_update proc
         count=0;
         fprintf(fsql,"\nDELIMITER // \n\n");
-        fprintf(fsql,"DROP PROCEDURE IF EXISTS sp_update%s;\n\n", argv[1]);
+        fprintf(fsql,"DROP PROCEDURE IF EXISTS sp_update%s //\n\n", argv[1]);
         fprintf(fsql,"CREATE PROCEDURE sp_update%s(\n",argv[1]);
         fprintf(fsql,"\tv%sID\t\tINT,\n",argv[1]);
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             if(count==totRows-1){
                 //fprintf(fsql,"	v%s	%s\n",fields[count],types[count]);
                 // have added currentuser at the end so no need to look for comma
@@ -269,7 +300,7 @@ int main(int argc, char *argv[]){
         fprintf(fsql,"\t\tUPDATE tbl%s SET\n",argv[1]);
         compresult = 0;
         tp=0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
 
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
@@ -303,7 +334,7 @@ int main(int argc, char *argv[]){
             fprintf(fsql,"\t\tSET @salt=RANDOM_BYTES(16);\n\n");
         }
         fprintf(fsql,"\t\tINSERT INTO tbl%s(\n",argv[1]);
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -325,7 +356,7 @@ int main(int argc, char *argv[]){
         }
         count = 0;
         fprintf(fsql,"\t\t) VALUES (\n");
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -354,7 +385,7 @@ int main(int argc, char *argv[]){
         }
         fprintf(fsql,"\t\t); \n\t\tselect LAST_INSERT_ID() as %sID;\n\tEND IF;\nEND \n//\n\n",argv[1]);
         //// next create the GET procedure
-        fprintf(fsql,"\n\nDROP PROCEDURE IF EXISTS sp_get%s;\n\n",argv[1]);
+        fprintf(fsql,"\n\nDROP PROCEDURE IF EXISTS sp_get%s //\n\n",argv[1]);
         fprintf(fsql,"CREATE PROCEDURE sp_get%s(\n",argv[1]);
 
         fprintf(fsql,"\tv%sID INT \n",argv[1]);
@@ -362,31 +393,31 @@ int main(int argc, char *argv[]){
         fprintf(fsql,"\tSelect * from tbl%s where %sID=v%sID AND RecordDeleted=0;\nEND\n\n",argv[1],argv[1],argv[1]);
 
         fprintf(fsql,"\n\n//\n\n");
-        fprintf(fsql,"DROP PROCEDURE IF EXISTS sp_delete%s;\n\n", argv[1]);
+        fprintf(fsql,"DROP PROCEDURE IF EXISTS sp_delete%s //\n\n", argv[1]);
         fprintf(fsql,"CREATE PROCEDURE sp_delete%s(\n	v%sID INT, vCurrentUserID INT\n)\n", argv[1],argv[1]);
         fprintf(fsql,"BEGIN\n\tUPDATE tbl%s SET RecordDeleted=1, ModifiedByUserID=vCurrentUserID WHERE %sID=v%sID;\nEND\n",argv[1],argv[1],argv[1]);
 
         fprintf(fsql,"\n\n//\n\n");
         
-        fprintf(fsql,"DROP PROCEDURE IF EXISTS sp_Lock%sRecord;\n\n", argv[1]);
+        fprintf(fsql,"DROP PROCEDURE IF EXISTS sp_Lock%sRecord //\n\n", argv[1]);
         fprintf(fsql,"CREATE PROCEDURE sp_Lock%sRecord(\n\tv%sID INT, vCurrentUserID INT\n)\n", argv[1],argv[1]);
         fprintf(fsql,"BEGIN\n\tUPDATE tbl%s SET RecordLockByUserID=vCurrentUserID, RecordLockTime=CURRENT_TIMESTAMP WHERE %sID=v%sID;\nEND\n",argv[1],argv[1],argv[1]);
 
         fprintf(fsql,"\n\n//\n\n");
         
-        fprintf(fsql,"DROP PROCEDURE IF EXISTS sp_Unlock%sRecord;\n\n", argv[1]);
+        fprintf(fsql,"DROP PROCEDURE IF EXISTS sp_Unlock%sRecord //\n\n", argv[1]);
         fprintf(fsql,"CREATE PROCEDURE sp_Unlock%sRecord(\n	v%sID INT\n)\n", argv[1],argv[1]);
         fprintf(fsql,"BEGIN\n\tUPDATE tbl%s SET RecordLockByUserID=0, RecordLockTime=NULL WHERE %sID=v%sID;\nEND\n",argv[1],argv[1],argv[1]);
 
         fprintf(fsql,"\n\n//\n\n");
-        fprintf(fsql,"\n/**************************************** \n");
+        fprintf(fsql,"\nDELIMITER ;\n/**************************************** \n");
         fprintf(fsql,"     end  %s \n",argv[1]);
         fprintf(fsql,"****************************************/ \n\n");
 
         fclose(fsql);
 
     }else{
-        printf("could not open sql file");
+        perror(filename); return EXIT_FAILURE;
     }
 
 
@@ -412,7 +443,7 @@ int main(int argc, char *argv[]){
         fprintf(fmsql,"BEGIN\n");
         fprintf(fmsql,"\tCREATE TABLE tbl%s(\n",argv[1]);
         fprintf(fmsql,"\t\t%sID\t\tINT PRIMARY KEY IDENTITY(1,1) NOT NULL,\n",argv[1]);
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             tp=2;
             strcpy(teststring,"DECIMAL(10,2)");
             compresult = strcmp(types[count], teststring);
@@ -455,7 +486,7 @@ int main(int argc, char *argv[]){
         fprintf(fmsql,"\t@%sID\t\tINT,\n",argv[1]);
         compresult = 0;
         tp=0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             tp=2;
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
@@ -501,7 +532,7 @@ int main(int argc, char *argv[]){
         fprintf(fmsql,"\t\tUPDATE tbl%s SET\n",argv[1]);
         compresult = 0;
         tp=0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
 
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
@@ -537,7 +568,7 @@ int main(int argc, char *argv[]){
             fprintf(fmsql,"\t\tSET @salt=CRYPT_GEN_RANDOM(16);\n");
         }
         fprintf(fmsql,"\t\tINSERT INTO tbl%s(\n",argv[1]);
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             tp=2;
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
@@ -558,7 +589,7 @@ int main(int argc, char *argv[]){
         }
         count = 0;
         fprintf(fmsql,"\t\t) VALUES (\n");
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             tp=2;
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
@@ -622,7 +653,7 @@ int main(int argc, char *argv[]){
         fclose(fmsql);
 
     }else{
-        printf("could not open sql file");
+        perror(filenamesql); return EXIT_FAILURE;
     }
 
 
@@ -657,57 +688,16 @@ int main(int argc, char *argv[]){
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date, 5=time, 6=varbinary
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
-            
-            strcpy(teststring,"VARBINARY");
-            compresult = strncmp(types[count], teststring,9);
-            if(compresult==0){
-                tp=6;
-            }
             
 
             if(tp==0){
                 fprintf(fcs,"\tprotected int _%s;\n", fields[count]);
             }else if(tp==1){
                 fprintf(fcs,"\tprotected float _%s;\n", fields[count]);
-            }else if(tp==2){
+            }else if(tp==2 || tp==6){
                 fprintf(fcs,"\tprotected string _%s = \"\";\n", fields[count]);
             }else if(tp==3){
                 fprintf(fcs,"\tprotected double _%s;\n", fields[count]);
@@ -733,50 +723,15 @@ int main(int argc, char *argv[]){
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
 
             if(tp==0){
                 fprintf(fcs,"\tpublic int  %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
             }else if(tp==1){
                 fprintf(fcs,"\tpublic float %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
-            }else if(tp==2){
+            }else if(tp==2 || tp==6){
                 fprintf(fcs,"\tpublic string %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
                 
             }else if(tp==3){
@@ -802,12 +757,16 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"public class %sD{\n",argv[1]);
         fprintf(fcs,"\tprotected string _LastErrorD = \"\";\n");
         fprintf(fcs,"\n\tpublic string LastErrorD {get=>_LastErrorD; set=> _LastErrorD=value;}\n\n");
-        fprintf(fcs,"\tpublic %s load(int ID, %s o){\n",argv[1],argv[1]);
+        fprintf(fcs,"\tpublic %s load(int ID, %s o",argv[1],argv[1]);
+        if(hasBIN==1) fprintf(fcs,",string key");
+        fprintf(fcs,"){\n");
         fprintf(fcs,"\t\to.%sID = ID;\n",argv[1]);
         fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
-        fprintf(fcs,"\t\t\to = load(ID, con, o);\n");
+        fprintf(fcs,"\t\t\to = load(ID, con, o");
+        if(hasBIN==1) fprintf(fcs,",key");
+        fprintf(fcs,");\n");
         fprintf(fcs,"\t\t\tcon.Close();\n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn o;\n");
@@ -824,7 +783,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
         fprintf(fcs,"\t\tsql += \"%sID \";\n", argv[1]);
         count = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -846,6 +805,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tsql += \"FROM tbl%s  \";\n", argv[1]);
         fprintf(fcs,"\t\tsql += \"WHERE %sID=\" + o.%sID + \";\";\n", argv[1],argv[1]);
         fprintf(fcs,"\t\ttry{\n");
+        if(hasBIN==1) writeMySqlKey(fcs);
         fprintf(fcs,"\t\t\tusing(MySqlCommand cmd = new MySqlCommand(sql,con)){\n");
         fprintf(fcs,"\t\t\t\tMySqlDataReader r;\n");
         fprintf(fcs,"\t\t\t\tusing(r = cmd.ExecuteReader()){\n");
@@ -853,56 +813,21 @@ int main(int argc, char *argv[]){
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
 
             if(tp==0){
                 fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
             }else if(tp==1){
                 // float
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetDouble(\"%s\");\n", fields[count], fields[count], fields[count]);
                 
-            }else if(tp==2){
+            }else if(tp==2 || tp==6){
                 fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? \"\" : r.GetString(\"%s\");\n", fields[count], fields[count], fields[count]);
             }else if(tp==3){
                 // double
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetDouble(\"%s\");\n", fields[count], fields[count], fields[count]);
             }else if(tp==4){
                 // DateTime
                 fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? DateTime.MinValue : r.GetDateTime(\"%s\");\n", fields[count], fields[count], fields[count]);
@@ -947,7 +872,9 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
-        fprintf(fcs,"\t\t\to = save(con,o,curUserID);\n");
+        fprintf(fcs,"\t\t\to = save(con,o,curUserID");
+        if(hasBIN==1) fprintf(fcs,",key");
+        fprintf(fcs,");\n");
         fprintf(fcs,"\t\t\tcon.Close();\n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn o;\n");
@@ -963,7 +890,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\tcmd.CommandType = CommandType.StoredProcedure;\n");
         fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"v%sID\",o.%sID);\n",argv[1],argv[1]);
         count = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"v%s\",o.%s);\n",fields[count],fields[count]);
         }
         fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"vCurrentUserID\",curUserID);\n");
@@ -1016,25 +943,31 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\treturn ret;\n");
         fprintf(fcs,"\t}\n\n\n");
         
-        fprintf(fcs,"\tpublic List<%s> get%ssL(){\n",argv[1],argv[1]);
+        fprintf(fcs,"\tpublic List<%s> get%ssL(",argv[1],argv[1]);
+        if(hasBIN==1) fprintf(fcs,"string key");
+        fprintf(fcs,"){\n");
         fprintf(fcs,"\t\tList<%s> l = new List<%s>();\n",argv[1],argv[1]);
         fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
-        fprintf(fcs,"\t\t\tl = get%ssL(con);\n",argv[1]);
+        fprintf(fcs,"\t\t\tl = get%ssL(con",argv[1]);
+        if(hasBIN==1) fprintf(fcs,",key");
+        fprintf(fcs,");\n");
         fprintf(fcs,"\t\t\tcon.Close();\n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn l;\n");
         fprintf(fcs,"\t}\n");
                     
-        fprintf(fcs,"\tpublic List<%s> get%ssL(MySqlConnection con){\n", argv[1], argv[1]);
+        fprintf(fcs,"\tpublic List<%s> get%ssL(MySqlConnection con", argv[1], argv[1]);
+        if(hasBIN==1) fprintf(fcs,",string key");
+        fprintf(fcs,"){\n");
 
         fprintf(fcs,"\t\tList<%s> l = new List<%s>();\n",argv[1],argv[1]);
         fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
         fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
         fprintf(fcs,"\t\tsql += \"%sID \";\n", argv[1]);
         count = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -1057,11 +990,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tsql += \" WHERE RecordDeleted=0  \";\n");
         fprintf(fcs,"\t\t//sql += \"AND %sID=\" + o.%sID + \";\";\n", argv[1],argv[1]);
         fprintf(fcs,"\t\ttry{\n");
-        fprintf(fcs,"\t\t\tif(incKey){\n");
-        fprintf(fcs,"\t\t\t\tusing(MySqlCommand cmd = new MySqlCommand(\"SET @key:='\" + key + \"'\",con)){\n");
-        fprintf(fcs,"\t\t\t\t\tcmd.ExecuteNonQuery();\n");
-        fprintf(fcs,"\t\t\t\t}\n");
-        fprintf(fcs,"\t\t\t}\n");
+        if(hasBIN==1) writeMySqlKey(fcs);
         fprintf(fcs,"\t\t\tusing(MySqlCommand cmd = new MySqlCommand(sql,con)){\n");
         fprintf(fcs,"\t\t\t\tMySqlDataReader r;\n");
         fprintf(fcs,"\t\t\t\tusing(r = cmd.ExecuteReader()){\n");
@@ -1071,56 +1000,21 @@ int main(int argc, char *argv[]){
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
 
             if(tp==0){
                 fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
             }else if(tp==1){
                 // float
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetDouble(\"%s\");\n", fields[count], fields[count], fields[count]);
                 
-            }else if(tp==2){
+            }else if(tp==2 || tp==6){
                 fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? \"\" : r.GetString(\"%s\");\n", fields[count], fields[count], fields[count]);
             }else if(tp==3){
                 // double
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetDouble(\"%s\");\n", fields[count], fields[count], fields[count]);
             }else if(tp==4){
                 // DateTime
                 fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? DateTime.MinValue : r.GetDateTime(\"%s\");\n", fields[count], fields[count], fields[count]);
@@ -1164,11 +1058,11 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (MySqlConnection con = new MySqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
-        fprintf(fcs,"\t\t\tdt = get%ssDT(con,srchString,filters, fields, SortBy, SortDirection, whereString",argv[1]);
+        fprintf(fcs,"\t\t\tdt = get%ssDT(con,srchString,filters, fields, SortBy, SortDirection",argv[1]);
         if(hasBIN==1){
             fprintf(fcs,",key");
         }
-        fprintf(fcs,");\n");
+        fprintf(fcs,",whereString);\n");
         fprintf(fcs,"\t\t\tcon.Close();\n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn dt;\n");
@@ -1194,7 +1088,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t\t}\n");
         count = 0;
         posss = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -1221,7 +1115,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t}\n");
         fprintf(fcs,"\t\t}else{\n");
         count = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -1231,13 +1125,13 @@ int main(int argc, char *argv[]){
             if(count==0){
                 /// leave off the comma
                 if(tp==6){
-                    fprintf(fcs,"\t\t\tstrFields += \"setEDataHKDF(%s,@key,EIV,ES) as %s \";\n", fields[count],fields[count]);
+                    fprintf(fcs,"\t\t\tstrFields += \",getEDataHKDF(%s,@key,EIV,ES) as %s \";\n", fields[count],fields[count]);
                 }else{
-                    fprintf(fcs,"\t\t\tstrFields += \"%s \";\n", fields[count]);
+                    fprintf(fcs,"\t\t\tstrFields += \",%s \";\n", fields[count]);
                 }
             }else{
                 if(tp==6){
-                    fprintf(fcs,"\t\t\tstrFields += \",setEDataHKDF(%s,@key,EIV,ES) as %s \";\n", fields[count], fields[count]);
+                    fprintf(fcs,"\t\t\tstrFields += \",getEDataHKDF(%s,@key,EIV,ES) as %s \";\n", fields[count], fields[count]);
                 }else{
                     fprintf(fcs,"\t\t\tstrFields += \",%s \";\n", fields[count]);
                 }
@@ -1254,8 +1148,9 @@ int main(int argc, char *argv[]){
 
         fprintf(fcs,"\t\tstring sortString = \"\";\n");
         fprintf(fcs,"\t\tif(SortBy.Length>0){\n");
+            posss = 0;
             count = 0;
-            for(count==0;count<totRows;count++){
+            for(count=0;count<totRows;count++){
                 strcpy(teststring,"VARBINARY");
                 compresult = strncmp(types[count], teststring,9);
                 tp=2;
@@ -1282,19 +1177,19 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\tstring middle=\"\";\n");
         fprintf(fcs,"\t\t\tforeach(SearchField f in filters){\n");
         fprintf(fcs,"\t\t\t\tif(f.FieldName==\"xxx\"){\n");
-        fprintf(fcs,"\t\t\t\t\twString += \"examplestringcolumn {f.EQUALS} @{f.FieldName} \";\n");
+        fprintf(fcs,"\t\t\t\t\twString += middle + $\"examplestringcolumn {f.EQUALS} @{f.FieldName} \";\n");
         fprintf(fcs,"\t\t\t\t\tmiddle= \" AND \";\n");
         fprintf(fcs,"\t\t\t\t}\n");
         count = 0;
         int posss = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
             if(compresult==0){
                 tp=6;
                 fprintf(fcs,"\t\t\t\telse if(f.FieldName==\"%s\"){\n",fields[count]);
-                fprintf(fcs,"\t\t\t\t\twString += \" getEDataHKDF(%s,@key,EIV,ES)  {f.EQUALS} @{f.FieldName} \";\n",fields[count]);
+                fprintf(fcs,"\t\t\t\t\twString += middle + $\" getEDataHKDF(%s,@key,EIV,ES)  {f.EQUALS} @{f.FieldName} \";\n",fields[count]);
                 if(hasBIN==1){
                     fprintf(fcs,"\t\t\t\t\tincKey=true;\n");
                 }
@@ -1308,7 +1203,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t\t\tstring fname= \"tbl%s.\" + f.FieldName;\n",argv[1]);
         fprintf(fcs,"\t\t\t\t\tif(f.FieldType==typeof(int) || f.FieldType==typeof(double)){\n");
         fprintf(fcs,"\t\t\t\t\t\tif(f.SearchType==1){\n");
-        fprintf(fcs,"\t\t\t\t\t\t\twString = middle + $\"({fname} >= @{f.FieldName} AND {fname} <= @{f.FieldName}2) \";\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"({fname} >= @{f.FieldName} AND {fname} <= @{f.FieldName}2) \";\n");
         fprintf(fcs,"\t\t\t\t\t\t}else{\n");
         fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"{fname}=@{f.FieldName}\";\n");
         fprintf(fcs,"\t\t\t\t\t\t}\n");
@@ -1337,7 +1232,7 @@ int main(int argc, char *argv[]){
 
 
 
-        fprintf(fcs,"\t\t\tsortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
+        fprintf(fcs,"\t\t\tif(SortBy.Length>0) sortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
         fprintf(fcs,"\t\tsql += \"%sID \" + strFields + \" \";\n", argv[1]);
         fprintf(fcs,"\t\tsql += \" FROM tbl%s  \";\n", argv[1]);
         fprintf(fcs,"\t\tsql += \" \" + strExtraJoins + \" \";\n");
@@ -1356,12 +1251,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tsql += \" \" + sortString +  \" \";\n");
 
         fprintf(fcs,"\t\ttry{\n");
-        fprintf(fcs,"\t\t\tif(incKey){\n");
-
-        fprintf(fcs,"\t\t\t\tusing(MySqlCommand cmd = new MySqlCommand(\"SET @key:='\" + key + \"'\",con)){\n");
-        fprintf(fcs,"\t\t\t\t\tcmd.ExecuteNonQuery();\n");
-        fprintf(fcs,"\t\t\t\t}\n");
-        fprintf(fcs,"\t\t\t}\n");
+        if(hasBIN==1) writeMySqlKey(fcs);
 
         fprintf(fcs,"\t\t\tusing(MySqlDataAdapter da = new MySqlDataAdapter(sql,con)){\n");
         fprintf(fcs,"\t\t\tif(srchString.Length > 0){\n");
@@ -1401,7 +1291,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\tsql += strSelect;\n");
         fprintf(fcs,"\t\t}else{\n");
         count = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             if(count==0){
                 /// leave off the comma
                 fprintf(fcs,"\t\t\tsql += \"%s \";\n", fields[count]);
@@ -1503,7 +1393,6 @@ int main(int argc, char *argv[]){
             fprintf(fcs,"string key");
         }
         fprintf(fcs,"){\n");
-        fprintf(fcs,",string whereString=\"\"){\n");
         fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
         fprintf(fcs,"\t\tList<%s> l = new List<%s>();\n",argv[1],argv[1]);
         fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
@@ -1553,7 +1442,7 @@ int main(int argc, char *argv[]){
             fprintf(fcs,"\t\t\t\tforeach(UserViewField f in o){\n");
             count = 0;
             int posss = 0;
-            for(count==0;count<totRows;count++){
+            for(count=0;count<totRows;count++){
                 strcpy(teststring,"VARBINARY");
                 compresult = strncmp(types[count], teststring,9);
                 tp=2;
@@ -1605,7 +1494,7 @@ int main(int argc, char *argv[]){
             fprintf(fcs,"\t\t\t\tforeach(UserViewField f in fields){\n");
             count = 0;
             int posss = 0;
-            for(count==0;count<totRows;count++){
+            for(count=0;count<totRows;count++){
                 strcpy(teststring,"VARBINARY");
                 compresult = strncmp(types[count], teststring,9);
                 tp=2;
@@ -1699,7 +1588,7 @@ int main(int argc, char *argv[]){
 
 
 
-        fprintf(fcs,"//// put this into AuditLog.cs\n");
+        fprintf(fcs,"}\n\n//// put this into AuditLogController.cs\npublic partial class AuditLogController {\n");
         fprintf(fcs,"\tpublic void DoHistory(%s oNew, %s oOld, int ObjectID,int curUserID){\n",argv[1],argv[1]);
         fprintf(fcs,"\t\tthis.items.Clear();\n");
         fprintf(fcs,"\t\tstring basetable = \"%s\";\n",argv[1]);
@@ -1708,23 +1597,12 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tAuditLog.ActionType actiontype = AuditLog.ActionType.Update;\n");
         fprintf(fcs,"\t\tif (oNew.%sID > 0){\n",argv[1]);
         count = 0;
-        tp = 0;
-        for(count==0;count<totRows;count++){
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
             if(tp==4){
                 fprintf(fcs,"\t\t\tif(oNew.%s != oOld.%s){\n",fields[count],fields[count]);
-                fprintf(fcs,"\t\t\t\tnewvalue = (oNew.%s == null) ? \"\": oNew.%s.ToString();\n",fields[count],fields[count]);
-                fprintf(fcs,"\t\t\t\toldvalue = (oOld.%s == null) ? \"\" : oOld.%s.ToString();\n",fields[count],fields[count]);
+                fprintf(fcs,"\t\t\t\tnewvalue = oNew.%s.ToString();\n",fields[count]);
+                fprintf(fcs,"\t\t\t\toldvalue = oOld.%s.ToString();\n",fields[count]);
                 fprintf(fcs,"\t\t\t\titems.Add(new AuditLog(curUserID, basetable, \"%s\", ObjectID, actiontype, newvalue, oldvalue));\n",fields[count]);
                 fprintf(fcs,"\t\t\t}");
             }else{
@@ -1748,16 +1626,20 @@ int main(int argc, char *argv[]){
         //// MS SQL Server Version
 
         
-        fprintf(fcs,"\n\n\n\n /// SQL Server Version of D");
+        fprintf(fcs,"}\n\n /// SQL Server Version of D (alternative to the MySQL D class above)\n");
         fprintf(fcs,"public class %sD{\n",argv[1]);
         fprintf(fcs,"\tprotected string _LastErrorD = \"\";\n");
         fprintf(fcs,"\n\tpublic string LastErrorD {get=>_LastErrorD; set=> _LastErrorD=value;}\n\n");
-        fprintf(fcs,"\tpublic %s load(int ID, %s o){\n",argv[1],argv[1]);
+        fprintf(fcs,"\tpublic %s load(int ID, %s o",argv[1],argv[1]);
+        if(hasBIN==1) fprintf(fcs,",string key");
+        fprintf(fcs,"){\n");
         fprintf(fcs,"\t\to.%sID = ID;\n",argv[1]);
         fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (SqlConnection con = new SqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
-        fprintf(fcs,"\t\t\to = load(ID, con, o);\n");
+        fprintf(fcs,"\t\t\to = load(ID, con, o");
+        if(hasBIN==1) fprintf(fcs,",key");
+        fprintf(fcs,");\n");
         fprintf(fcs,"\t\t\tcon.Close();\n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn o;\n");
@@ -1769,17 +1651,12 @@ int main(int argc, char *argv[]){
             fprintf(fcs,",string key");
         }
         fprintf(fcs,"){\n");
-        if(hasBIN){
-            fprintf(fcs,"\t\tusing(SqlCommand cmdk = new SqlCommand(\"OpenKeys\",con)){\n");
-            fprintf(fcs,"\t\t\tcmdk.ExecuteNonQuery();\n");
-            fprintf(fcs,"\t\t}\n");
-        }
         fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
         fprintf(fcs,"\t\to.%sID = ID;\n",argv[1]);
         fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
         fprintf(fcs,"\t\tsql += \"%sID \";\n", argv[1]);
         count = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -1787,7 +1664,7 @@ int main(int argc, char *argv[]){
                 tp=6;
             }
             if(tp==6){
-                fprintf(fcs,"\t\tsql += \",dbo.getEData(%s,'\" + key + \"',%sID) as %s \";\n", fields[count],fields[count],argv[1]);
+                fprintf(fcs,"\t\tsql += \",dbo.getEData(%s,'\" + key + \"',%sID) as %s \";\n", fields[count],argv[1],fields[count]);
             }else{
                 fprintf(fcs,"\t\tsql += \",%s \";\n", fields[count]);
             }
@@ -1808,73 +1685,38 @@ int main(int argc, char *argv[]){
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
 
             if(tp==0){
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? 0 : r.GetInt32(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else if(tp==1){
                 // float
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? 0 : r.GetDouble(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
                 
-            }else if(tp==2){
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? \"\" : r.GetString(\"%s\");\n", fields[count], fields[count], fields[count]);
+            }else if(tp==2 || tp==6){
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? \"\" : r.GetString(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else if(tp==3){
                 // double
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetDouble(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? 0 : r.GetDouble(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else if(tp==4){
                 // DateTime
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? DateTime.MinValue : r.GetDateTime(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else if(tp==5){
                 // Time
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? DateTime.MinValue : r.GetDateTime(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else{
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? \"\" : r.GetString(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? \"\" : r.GetString(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }
             
         }
-        fprintf(fcs,"\t\t\t\t\t\to.RecordDeleted =r.IsDBNull(\"RecordDeleted\") ? false : r.GetInt32(\"RecordDeleted\")==1;\n");
-        fprintf(fcs,"\t\t\t\t\t\to.RecordLockByUserID =r.IsDBNull(\"RecordLockByUserID\") ? 0 : r.GetInt32(\"RecordLockByUserID\");\n");
-        fprintf(fcs,"\t\t\t\t\t\to.RecordLockTime =r.IsDBNull(\"RecordLockTime\") ? DateTime.MinValue : r.GetDateTime(\"RecordLockTime\");\n");
-        fprintf(fcs,"\t\t\t\t\t\to.dateCreated =r.IsDBNull(\"dateCreated\") ? DateTime.MinValue : r.GetDateTime(\"dateCreated\");\n");
-        fprintf(fcs,"\t\t\t\t\t\to.dateModified =r.IsDBNull(\"dateModified\") ? DateTime.MinValue : r.GetDateTime(\"dateModified\");\n");
-        fprintf(fcs,"\t\t\t\t\t\to.ModifiedByUserID =r.IsDBNull(\"ModifiedByUserID\") ? 0 : r.GetInt32(\"ModifiedByUserID\");\n");
+        fprintf(fcs,"\t\t\t\t\t\to.RecordDeleted =r.IsDBNull(r.GetOrdinal(\"RecordDeleted\")) ? false : r.GetInt32(r.GetOrdinal(\"RecordDeleted\"))==1;\n");
+        fprintf(fcs,"\t\t\t\t\t\to.RecordLockByUserID =r.IsDBNull(r.GetOrdinal(\"RecordLockByUserID\")) ? 0 : r.GetInt32(r.GetOrdinal(\"RecordLockByUserID\"));\n");
+        fprintf(fcs,"\t\t\t\t\t\to.RecordLockTime =r.IsDBNull(r.GetOrdinal(\"RecordLockTime\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"RecordLockTime\"));\n");
+        fprintf(fcs,"\t\t\t\t\t\to.dateCreated =r.IsDBNull(r.GetOrdinal(\"dateCreated\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"dateCreated\"));\n");
+        fprintf(fcs,"\t\t\t\t\t\to.dateModified =r.IsDBNull(r.GetOrdinal(\"dateModified\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"dateModified\"));\n");
+        fprintf(fcs,"\t\t\t\t\t\to.ModifiedByUserID =r.IsDBNull(r.GetOrdinal(\"ModifiedByUserID\")) ? 0 : r.GetInt32(r.GetOrdinal(\"ModifiedByUserID\"));\n");
 
 
         fprintf(fcs,"\t\t\t\t\t}\n");
@@ -1895,17 +1737,14 @@ int main(int argc, char *argv[]){
             fprintf(fcs,", string key");
         }
         fprintf(fcs,"){\n");
-        if(hasBIN){
-            fprintf(fcs,"\t\tusing(SqlCommand cmdk = new SqlCommand(\"OpenKeys\",con)){\n");
-            fprintf(fcs,"\t\t\tcmdk.ExecuteNonQuery();\n");
-            fprintf(fcs,"\t\t}\n");
-        }
         fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
         fprintf(fcs,"\t\tint ret = 0;\n");
         fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (SqlConnection con = new SqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
-        fprintf(fcs,"\t\t\to = save(con,o,curUserID);\n");
+        fprintf(fcs,"\t\t\to = save(con,o,curUserID");
+        if(hasBIN==1) fprintf(fcs,",key");
+        fprintf(fcs,");\n");
         fprintf(fcs,"\t\t\tcon.Close();\n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn o;\n");
@@ -1919,51 +1758,16 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tint ret = 0;\n");
         if(hasBIN==1){
             fprintf(fcs,"\t\tusing(SqlCommand cmd = new SqlCommand(\"OpenKeys\",con)){\n");
-            fprintf(fcs,"\t\t\tcmd.ExecuteNonQuery()\n");
+            fprintf(fcs,"\t\t\tcmd.ExecuteNonQuery();\n");
             fprintf(fcs,"\t\t}\n");
         } 
         fprintf(fcs,"\t\tusing(SqlCommand cmd = new SqlCommand(\"sp_Update%s\",con)){\n", argv[1]);
         fprintf(fcs,"\t\t\tcmd.CommandType = CommandType.StoredProcedure;\n");
         fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"@%sID\",o.%sID);\n",argv[1],argv[1]);
         count = 0;
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
 
             if(tp==4){
 
@@ -1971,7 +1775,7 @@ int main(int argc, char *argv[]){
                 fprintf(fcs,"\t\t\t\tcmd.Parameters.AddWithValue(\"@%s\",DBNull.Value);\n",fields[count]);
                 fprintf(fcs,"\t\t\t}else{\n");
                 fprintf(fcs,"\t\t\t\tcmd.Parameters.AddWithValue(\"@%s\",o.%s);\n",fields[count],fields[count]);
-                fprintf(fcs,"\t\t}else{\n");
+                fprintf(fcs,"\t\t\t}\n");
 
             }else{
                 fprintf(fcs,"\t\t\tcmd.Parameters.AddWithValue(\"@%s\",o.%s);\n",fields[count],fields[count]);
@@ -2003,54 +1807,20 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"){\n");
         fprintf(fcs,"\t\tint ret = 0;\n");
         fprintf(fcs,"\t\tusing(var cmd = session.Connection.CreateCommand()){\n");
-        fprintf(fcs,"\t\t\tcmd.CommandText = \"sp_Update%s\"\n", argv[1]);
+        fprintf(fcs,"\t\t\tcmd.CommandText = \"sp_Update%s\";\n", argv[1]);
         fprintf(fcs,"\t\t\tcmd.CommandType = CommandType.StoredProcedure;\n");
+        fprintf(fcs,"\t\t\tcmd.Transaction = tx;\n");
         fprintf(fcs,"\t\t\tvar parameters = new List<(string Name, object Value)>\n");
         fprintf(fcs,"\t\t\t{\n");
         fprintf(fcs,"\t\t\t\t(\"@%sID\",o.%sID),\n",argv[1],argv[1]);
         count = 0;
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
 
             if(tp==4){
 
-                fprintf(fcs,"\t\t\t\t(\"@%s\",(o.%s<new DateTime(1753,1,1),NBNull.Value,o.%s),\n",fields[count],fields[count],fields[count]);
+                fprintf(fcs,"\t\t\t\t(\"@%s\",o.%s<new DateTime(1753,1,1) ? (object)DBNull.Value : o.%s),\n",fields[count],fields[count],fields[count]);
 
             }else{
                 fprintf(fcs,"\t\t\t\t(\"@%s\",o.%s),\n",fields[count],fields[count]);
@@ -2058,7 +1828,7 @@ int main(int argc, char *argv[]){
         }
 
         fprintf(fcs,"\t\t\t\t(\"@CurrentUserID\",curUserID),\n");
-        fprintf(fcs,"\t\t\t}\n");
+        fprintf(fcs,"\t\t\t};\n");
 
         
         fprintf(fcs,"\t\t\tforeach (var pItem in parameters)\n");
@@ -2072,7 +1842,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\ttry{\n");
         fprintf(fcs,"\t\t\t\tvar recid = cmd.ExecuteScalar();\n");
         fprintf(fcs,"\t\t\t\tif (recid != null && recid != DBNull.Value){\n");
-        fprintf(fcs,"\t\t\t\t\tio.InspectionId = Convert.ToInt32(recid);\n");
+        fprintf(fcs,"\t\t\t\t\tret = Convert.ToInt32(recid);\n");
         fprintf(fcs,"\t\t\t\t}else{\n");
         fprintf(fcs,"\t\t\t\t\tthrow new Exception(\"No ID returned from stored procedure\");\n");
         fprintf(fcs,"\t\t\t\t}\n");
@@ -2128,18 +1898,24 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\treturn ret;\n");
         fprintf(fcs,"\t}\n\n\n");
         
-        fprintf(fcs,"\tpublic List<%s> get%ssL(){\n",argv[1],argv[1]);
+        fprintf(fcs,"\tpublic List<%s> get%ssL(",argv[1],argv[1]);
+        if(hasBIN==1) fprintf(fcs,"string key");
+        fprintf(fcs,"){\n");
         fprintf(fcs,"\t\tList<%s> l = new List<%s>();\n",argv[1],argv[1]);
         fprintf(fcs,"\t\tstring connString = DALGlobal.connectionString; \n");
         fprintf(fcs,"\t\tusing (SqlConnection con = new SqlConnection(connString)){\n");
         fprintf(fcs,"\t\t\tcon.Open();\n");
-        fprintf(fcs,"\t\t\tl = get%ssL(con);\n",argv[1]);
+        fprintf(fcs,"\t\t\tl = get%ssL(con",argv[1]);
+        if(hasBIN==1) fprintf(fcs,",key");
+        fprintf(fcs,");\n");
         fprintf(fcs,"\t\t\tcon.Close();\n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn l;\n");
         fprintf(fcs,"\t}\n");
                     
-        fprintf(fcs,"\tpublic List<%s> get%ssL(SqlConnection con){\n", argv[1], argv[1]);
+        fprintf(fcs,"\tpublic List<%s> get%ssL(SqlConnection con", argv[1], argv[1]);
+        if(hasBIN==1) fprintf(fcs,",string key");
+        fprintf(fcs,"){\n");
         if(hasBIN){
             fprintf(fcs,"\t\tusing(SqlCommand cmdk = new SqlCommand(\"OpenKeys\",con)){\n");
             fprintf(fcs,"\t\t\tcmdk.ExecuteNonQuery();\n");
@@ -2151,7 +1927,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
         fprintf(fcs,"\t\tsql += \"%sID \";\n", argv[1]);
         count = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -2159,7 +1935,7 @@ int main(int argc, char *argv[]){
                 tp=6;
             }
             if(tp==6){
-                fprintf(fcs,"\t\tsql += \",dbp.getEData(%s,ES) as %s \";\n", fields[count],fields[count]);
+                fprintf(fcs,"\t\tsql += \",dbo.getEData(%s,ES) as %s \";\n", fields[count],fields[count]);
             }else{
                 fprintf(fcs,"\t\tsql += \",%s \";\n", fields[count]);
             }
@@ -2179,77 +1955,42 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t\tusing(r = cmd.ExecuteReader()){\n");
         fprintf(fcs,"\t\t\t\t\twhile(r.Read()){\n");
         fprintf(fcs,"\t\t\t\t\t\t%s o = new %s();\n",argv[1],argv[1]);
-        fprintf(fcs,"\t\t\t\t\t\to.%sID =r.IsDBNull(\"%sID\") ? 0 : r.GetInt32(\"%sID\");\n",argv[1],argv[1],argv[1]);
+        fprintf(fcs,"\t\t\t\t\t\to.%sID =r.IsDBNull(r.GetOrdinal(\"%sID\")) ? 0 : r.GetInt32(r.GetOrdinal(\"%sID\"));\n",argv[1],argv[1],argv[1]);
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
 
             if(tp==0){
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? 0 : r.GetInt32(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else if(tp==1){
                 // float
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? 0 : r.GetDouble(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
                 
-            }else if(tp==2){
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? \"\" : r.GetString(\"%s\");\n", fields[count], fields[count], fields[count]);
+            }else if(tp==2 || tp==6){
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? \"\" : r.GetString(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else if(tp==3){
                 // double
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? 0 : r.GetInt32(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? 0 : r.GetDouble(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else if(tp==4){
                 // DateTime
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? DateTime.MinValue : r.GetDateTime(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else if(tp==5){
                 // Time
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? DateTime.MinValue : r.GetDateTime(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }else{
-                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(\"%s\") ? \"\" : r.GetString(\"%s\");\n", fields[count], fields[count], fields[count]);
+                fprintf(fcs,"\t\t\t\t\t\to.%s =r.IsDBNull(r.GetOrdinal(\"%s\")) ? \"\" : r.GetString(r.GetOrdinal(\"%s\"));\n", fields[count], fields[count], fields[count]);
             }
             
         }
-        fprintf(fcs,"\t\t\t\t\t\to.RecordDeleted =r.IsDBNull(\"RecordDeleted\") ? false : r.GetInt32(\"RecordDeleted\")==1;\n");
-        fprintf(fcs,"\t\t\t\t\t\to.RecordLockByUserID =r.IsDBNull(\"RecordLockByUserID\") ? 0 : r.GetInt32(\"RecordLockByUserID\");\n");
-        fprintf(fcs,"\t\t\t\t\t\to.RecordLockTime =r.IsDBNull(\"RecordLockTime\") ? DateTime.MinValue : r.GetDateTime(\"RecordLockTime\");\n");
-        fprintf(fcs,"\t\t\t\t\t\to.dateCreated =r.IsDBNull(\"dateCreated\") ? DateTime.MinValue : r.GetDateTime(\"dateCreated\");\n");
-        fprintf(fcs,"\t\t\t\t\t\to.dateModified =r.IsDBNull(\"dateModified\") ? DateTime.MinValue : r.GetDateTime(\"dateModified\");\n");
-        fprintf(fcs,"\t\t\t\t\t\to.ModifiedByUserID =r.IsDBNull(\"ModifiedByUserID\") ? 0 : r.GetInt32(\"ModifiedByUserID\");\n");
+        fprintf(fcs,"\t\t\t\t\t\to.RecordDeleted =r.IsDBNull(r.GetOrdinal(\"RecordDeleted\")) ? false : r.GetInt32(r.GetOrdinal(\"RecordDeleted\"))==1;\n");
+        fprintf(fcs,"\t\t\t\t\t\to.RecordLockByUserID =r.IsDBNull(r.GetOrdinal(\"RecordLockByUserID\")) ? 0 : r.GetInt32(r.GetOrdinal(\"RecordLockByUserID\"));\n");
+        fprintf(fcs,"\t\t\t\t\t\to.RecordLockTime =r.IsDBNull(r.GetOrdinal(\"RecordLockTime\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"RecordLockTime\"));\n");
+        fprintf(fcs,"\t\t\t\t\t\to.dateCreated =r.IsDBNull(r.GetOrdinal(\"dateCreated\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"dateCreated\"));\n");
+        fprintf(fcs,"\t\t\t\t\t\to.dateModified =r.IsDBNull(r.GetOrdinal(\"dateModified\")) ? DateTime.MinValue : r.GetDateTime(r.GetOrdinal(\"dateModified\"));\n");
+        fprintf(fcs,"\t\t\t\t\t\to.ModifiedByUserID =r.IsDBNull(r.GetOrdinal(\"ModifiedByUserID\")) ? 0 : r.GetInt32(r.GetOrdinal(\"ModifiedByUserID\"));\n");
 
 
         fprintf(fcs,"\t\t\t\t\t\tl.Add(o);\n");
@@ -2278,7 +2019,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\tcon.Open();\n");
         fprintf(fcs,"\t\t\tdt = get%ssDT(con,srchString,filters, fields, SortBy, SortDirection",argv[1]);
         if(hasBIN==1){
-            fprintf(fcs,",key = \"\"");
+            fprintf(fcs,",key");
         }
         fprintf(fcs,",whereString);\n");
         fprintf(fcs,"\t\t\tcon.Close();\n");
@@ -2301,17 +2042,17 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t_LastErrorD = \"\";\n");
         fprintf(fcs,"\t\tstring sql = \"SELECT \";\n");
         fprintf(fcs,"\t\tstring strFields = \"\";\n");
-        fprintf(fcs,"\t\tbool IncKey = false;\n");
+        fprintf(fcs,"\t\tbool incKey = false;\n");
         fprintf(fcs,"\t\tstring strExtraJoins = \"\";\n");
 
         fprintf(fcs,"\t\tif(fields.Count>0){\n");
         fprintf(fcs,"\t\t\tforeach(UserViewField f in fields){\n");
             fprintf(fcs,"\t\t\t\tif(f.FieldName==\"tmpGUID\"){\n");
-            fprintf(fcs,"\t\t\t\t\tstrFields += \",CAST(SELECT NEWID() AS VARCHAR(100)) as tmpGUID \";\n");
+            fprintf(fcs,"\t\t\t\t\tstrFields += \",CAST(NEWID() AS VARCHAR(100)) as tmpGUID \";\n");
             fprintf(fcs,"\t\t\t\t}\n");
         count = 0;
         posss = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -2330,7 +2071,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t}\n");
         fprintf(fcs,"\t\t}else{\n");
         count = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -2364,7 +2105,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tif(SortBy.Length>0){\n");
         count = 0;
         posss = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -2381,11 +2122,11 @@ int main(int argc, char *argv[]){
             }
         }
         //fprintf(fcs,"\t\t\tsql += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
-        fprintf(fcs,"\t\t\tsortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
+        fprintf(fcs,"\t\t\tif(SortBy.Length>0) sortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
         fprintf(fcs,"\t\t}\n");
 
         //fprintf(fcs,"\t\tif(SortBy.Length>0){\n");
-        //fprintf(fcs,"\t\t\tsortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
+        //fprintf(fcs,"\t\t\tif(SortBy.Length>0) sortString += \" ORDER BY \" + SortBy + \" \" + SortDirection + \" \";\n");
         //fprintf(fcs,"\t\t}\n");
         
 
@@ -2393,12 +2134,12 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\tstring middle=\"\";\n");
         fprintf(fcs,"\t\t\tforeach(SearchField f in filters){\n");
         fprintf(fcs,"\t\t\t\tif(f.FieldName==\"xxx\"){\n");
-        fprintf(fcs,"\t\t\t\t\twString += \"examplestringcolumn {f.EQUALS} @{f.FieldName} \";\n");
+        fprintf(fcs,"\t\t\t\t\twString += middle + $\"examplestringcolumn {f.EQUALS} @{f.FieldName} \";\n");
         fprintf(fcs,"\t\t\t\t\tmiddle= \" AND \";\n");
         fprintf(fcs,"\t\t\t\t}\n");
         count = 0;
         posss = 0;
-        for(count==0;count<totRows;count++){
+        for(count=0;count<totRows;count++){
             strcpy(teststring,"VARBINARY");
             compresult = strncmp(types[count], teststring,9);
             tp=2;
@@ -2418,7 +2159,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t\t\tstring fname= \"tbl.\" + f.FieldName;\n");
         fprintf(fcs,"\t\t\t\t\tif(f.FieldType==typeof(int) || f.FieldType==typeof(double)){\n");
         fprintf(fcs,"\t\t\t\t\t\tif(f.SearchType==1){\n");
-        fprintf(fcs,"\t\t\t\t\t\t\twString = middle + $\"({fname} >= @{f.FieldName} AND {fname} <= @{f.FieldName}2) \";\n");
+        fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"({fname} >= @{f.FieldName} AND {fname} <= @{f.FieldName}2) \";\n");
         fprintf(fcs,"\t\t\t\t\t\t}else{\n");
         fprintf(fcs,"\t\t\t\t\t\t\twString += middle + $\"{fname}=@{f.FieldName}\";\n");
         fprintf(fcs,"\t\t\t\t\t\t}\n");
@@ -2537,13 +2278,13 @@ int main(int argc, char *argv[]){
         fprintf(fcsx,"\tpublic void load%s(int ID){\n",argv[1]);
         fprintf(fcsx,"\t\tthis.%sID=ID;\n",argv[1]);
         fprintf(fcsx,"\t\tthis.Obj%s = new %s();\n",argv[1],argv[1]);
-        fprintf(fcsx,"\t\t%sbl = new %sBL();\n",argv[1],argv[1]);
+        fprintf(fcsx,"\t\t%sBL %sbl = new %sBL();\n",argv[1],argv[1],argv[1]);
 
-        fprintf(fcsx,"\t\tObj%s = %sbl.load%s(ID,Obj%s",argv[1],argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\tObj%s = %sbl.load(ID,Obj%s",argv[1],argv[1],argv[1]);
         if(hasBIN==1){
-            fprintf(fcs,",appglobal.Key");
+            fprintf(fcsx,",appglobal.Key");
         }
-        fprintf(fcs,");\n");
+        fprintf(fcsx,");\n");
         fprintf(fcsx,"\t\tif(%sbl.LastErrorB.Length > 1){\n",argv[1]);
         fprintf(fcsx,"\t\t\tErrorLogBL.addLog(appglobal.curUserID,\"ERROR F%s-001 Unable to load %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
         fprintf(fcsx,"\t\t\tMessageBox.Show(\"ERROR F%s-001 Unable to load %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
@@ -2551,30 +2292,16 @@ int main(int argc, char *argv[]){
 
 
         count = 0;
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            if(tp==4){
-                fprintf(fcsx,"\t\t\tif(%s.%s > DateTime.MinValue){\n",argv[1],fields[count]);
+
+            if(tp==4 || tp==5){
+                fprintf(fcsx,"\t\t\tif(Obj%s.%s > DateTime.MinValue){\n",argv[1],fields[count]);
                 fprintf(fcsx,"\t\t\t\tthis.txt%s.Text = Obj%s.%s.ToString(\"MM/dd/yyyy\");\n", fields[count],argv[1],fields[count]);
                 fprintf(fcsx,"\t\t\t}\n");
             }else{
-                fprintf(fcsx,"\t\t\tthis.txt%s.Text = Obj%s.%s;\n", fields[count],argv[1],fields[count]);
+                fprintf(fcsx,"\t\t\tthis.txt%s.Text = Obj%s.%s.ToString();\n", fields[count],argv[1],fields[count]);
             }
                 
         }
@@ -2585,26 +2312,16 @@ int main(int argc, char *argv[]){
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            if(tp==4){
-                fprintf(fcsx,"\t\tDateTime.TryParse(this.txt%s.Text + "", out Obj%s.%s);\n",fields[count],argv[1],fields[count]);
+
+            if(tp==4 || tp==5){
+                fprintf(fcsx,"\t\tif (!DateTime.TryParse(this.txt%s.Text, out DateTime value%s)) { MessageBox.Show(\"Invalid date/time for %s.\"); return; }\n",fields[count],fields[count],fields[count]);
+                fprintf(fcsx,"\t\tObj%s.%s = value%s;\n",argv[1],fields[count],fields[count]);
+            }else if(tp==0 || tp==3){
+                fprintf(fcsx,"\t\tif (!%s.TryParse(this.txt%s.Text, out %s value%s)) { MessageBox.Show(\"Invalid number for %s.\"); return; }\n",tp==0?"int":"double",fields[count],tp==0?"int":"double",fields[count],fields[count]);
+                fprintf(fcsx,"\t\tObj%s.%s = value%s;\n",argv[1],fields[count],fields[count]);
             }else{
                 fprintf(fcsx,"\t\tObj%s.%s = this.txt%s.Text;\n", argv[1],fields[count],fields[count]);
             }
@@ -2614,22 +2331,22 @@ int main(int argc, char *argv[]){
         fprintf(fcsx,"\t\t%sBL %sbl = new %sBL();\n",argv[1],argv[1],argv[1]);
         fprintf(fcsx,"\t\tif(Obj%s.%sID>0){\n",argv[1],argv[1]);
         fprintf(fcsx,"\t\t\twasinsert = false;\n");
-        fprintf(fcsx,"\t\t\t%s oOld = %sbl.load%s(Obj%s.%sID,oOld",argv[1],argv[1],argv[1],argv[1],argv[1]);
+        fprintf(fcsx,"\t\t\t%s oOld = %sbl.load(Obj%s.%sID,new %s()",argv[1],argv[1],argv[1],argv[1],argv[1]);
         if(hasBIN==1){
-            fprintf(fcs,",appglobal.Key");
+            fprintf(fcsx,",appglobal.Key");
         }
-        fprintf(fcs,");\n");
+        fprintf(fcsx,");\n");
         fprintf(fcsx,"\t\t\tif(oOld.%sID>0){\n",argv[1]);
-        fprintf(fcsx,"\t\t\t%sbl.setHistory(cOld,%s,appglobal.curUserID);\n",argv[1],argv[1]);
+        fprintf(fcsx,"\t\t\t%sbl.setHistory(Obj%s,oOld,appglobal.curUserID);\n",argv[1],argv[1]);
         fprintf(fcsx,"\t\t\t}\n");
         fprintf(fcsx,"\t\t}\n");
 
         fprintf(fcsx,"\t\t%sbl.LastErrorB = \"\";\n",argv[1]);
         fprintf(fcsx,"\t\tObj%s = %sbl.save(Obj%s,appglobal.curUserID",argv[1],argv[1],argv[1]);
         if(hasBIN==1){
-            fprintf(fcs,",appglobal.Key");
+            fprintf(fcsx,",appglobal.Key");
         }
-        fprintf(fcs,");\n");
+        fprintf(fcsx,");\n");
         fprintf(fcsx,"\t\tif(%sbl.LastErrorB.Length>0){\n",argv[1]);
         fprintf(fcsx,"\t\t\tErrorLogBL.addLog(appglobal.curUserID,\"ERROR F%s-002 Unable to save %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
         fprintf(fcsx,"\t\t\tMessageBox.Show(\"ERROR F%s-002 Unable to save %s: \" + %sbl.LastErrorB);\n",argv[1],argv[1],argv[1]);
@@ -2839,25 +2556,25 @@ int main(int argc, char *argv[]){
         fprintf(fcsx,"\t\tDataTable table;\n");
         fprintf(fcsx,"\t\tif (selectedView != null)\n");
         fprintf(fcsx,"\t\t{\n");
-        fprintf(fcsx,"\t\ttable = b.get%ssDT(srchString, selectedView.Fields",argv[1]);
+        fprintf(fcsx,"\t\ttable = b.get%ssDT(srchString, new List<SearchField>(), selectedView.Fields, curSortBy, curSortDirection",argv[1]);
         if(hasBIN==1){
-            fprintf(fcs,",appglobal.Key");
+            fprintf(fcsx,",appglobal.Key");
         }
-        fprintf(fcs,");\n");
+        fprintf(fcsx,");\n");
         fprintf(fcsx,"\t\t}\n");
         fprintf(fcsx,"\t\telse\n");
         fprintf(fcsx,"\t\t{\n");
-        fprintf(fcsx,"\t\t\tstring strDefault = \"Description, Column2\";\n");
-        fprintf(fcsx,"\t\t\ttable = b.get%ssDT(srchString, strDefault",argv[1]);
+
+        fprintf(fcsx,"\t\t\ttable = b.get%ssDT(srchString, new List<SearchField>(), appglobal.getDefaultViewFields(FormTypeID), curSortBy, curSortDirection",argv[1]);
         if(hasBIN==1){
-            fprintf(fcs,",appglobal.Key");
+            fprintf(fcsx,",appglobal.Key");
         }
-        fprintf(fcs,");\n");
+        fprintf(fcsx,");\n");
         fprintf(fcsx,"\t\t}\n");
         fprintf(fcsx,"\t\tdataGridView1.DataSource = table;\n");
         fprintf(fcsx,"\t\tdataGridView1.AutoResizeColumns();\n");
         fprintf(fcsx,"\t\tif (selectedView == null) { \n");
-        fprintf(fcsx,"\t\t\tdataGridView1.Columns[\"Column2\"].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;\n");
+        fprintf(fcsx,"\t\t\tdataGridView1.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;\n");
         fprintf(fcsx,"\t\t}\n");
         fprintf(fcsx,"\t\telse\n");
         fprintf(fcsx,"\t\t{\n");
@@ -2875,42 +2592,27 @@ int main(int argc, char *argv[]){
         fprintf(fcsx,"\t}\n");
 
 
-        fprintf(fcsx,"\tprivate void UseThisForDataTableSave(){\n");
-        fprintf(fcsx,"\t\tdataGridView%s.EndEdit()\n",argv[1]);
+        fprintf(fcsx,"\tprivate void UseThisForDataTableSave(DataRow row){\n");
+        fprintf(fcsx,"\t\tdataGridView%s.EndEdit();\n",argv[1]);
         fprintf(fcsx,"\t\tdataGridView%s.ClearSelection();\n",argv[1]);
         fprintf(fcsx,"\t\t%sBS.ResetBindings(true);\n",argv[1]);
 
         fprintf(fcsx,"\t\t%sBL b = new %sBL();\n",argv[1],argv[1]);
-        fprintf(fcsx,"\t\t%s b = new %s();\n",argv[1],argv[1]);
-        fprintf(fcsx,"\t\to.%sID = BLLGlobal.getDataRowInt(row,\"%sID\",o.%sID);b.load(o.%s,o);// if saving existings\n",argv[1],argv[1],argv[1],argv[1]);
-        fprintf(fcsx,"\t\to.%sID = 0;// if adding new\n",argv[1]);
+        fprintf(fcsx,"\t\t%s o = new %s();\n",argv[1],argv[1]);
+        fprintf(fcsx,"\t\to.%sID = BLLGlobal.getDataRowInt(row,\"%sID\",0);\n",argv[1],argv[1]);
+        fprintf(fcsx,"\t\tif(o.%sID>0) o=b.load(o.%sID,o",argv[1],argv[1]);
+        if(hasBIN==1) fprintf(fcsx,",appglobal.Key");
+        fprintf(fcsx,");\n");
+        fprintf(fcsx,"\t\tif(b.LastErrorB.Length>0) { MessageBox.Show(b.LastErrorB); return; }\n");
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            if(tp==0){
+            if(tp==4 || tp==5){
+                fprintf(fcsx,"\t\to.%s = BLLGlobal.getDataRowDate(row,\"%s\",o.%s);\n",fields[count],fields[count],fields[count]);
+            }else if(tp==0){
                 /// number
                 fprintf(fcsx,"\t\to.%s = BLLGlobal.getDataRowInt(row,\"%s\",o.%s);\n",fields[count],fields[count],fields[count]);
                 
@@ -3046,7 +2748,7 @@ int main(int argc, char *argv[]){
 
     if(fcpph!=NULL){
          
-        fprintf(fcpph,"#include <string>\n");
+        fprintf(fcpph,"#include <string>\n#include <ctime>\n");
         fprintf(fcpph,"\n\nclass %s{\n",argv[1]);
 
         fprintf(fcpph,"\tpublic:\n");
@@ -3055,60 +2757,19 @@ int main(int argc, char *argv[]){
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date, 5=time, 6=varbinary
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
-            
-            strcpy(teststring,"VARBINARY");
-            compresult = strncmp(types[count], teststring,9);
-            if(compresult==0){
-                tp=6;
-            }
             
 
             if(tp==0){
                 fprintf(fcpph,"\t\tint %s;\n", fields[count]);
             }else if(tp==1){
                 fprintf(fcpph,"\t\tfloat %s;\n", fields[count]);
-            }else if(tp==2){
+            }else if(tp==2 || tp==6){
                 fprintf(fcpph,"\t\tstd::string %s = \"\";\n", fields[count]);
             }else if(tp==3){
-                fprintf(fcpph,"\t\tdouble _%s;\n", fields[count]);
+                fprintf(fcpph,"\t\tdouble %s;\n", fields[count]);
             }else if(tp==4){
                 fprintf(fcpph,"\t\ttm %s;\n", fields[count]);
             }else if(tp==5){
@@ -3131,50 +2792,15 @@ int main(int argc, char *argv[]){
         count = 0;
         compresult = 0;
         tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-        for(count==0;count<totRows;count++){
-            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
-            strcpy(teststring,"INT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"TINYINT");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            }        
-            strcpy(teststring,"int");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=0;
-            } 
+        for(count=0;count<totRows;count++){
+            tp = fieldType(types[count]);
 
-            strcpy(teststring,"DECIMAL(10,2)");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=3;
-            }
-            strcpy(teststring,"DATE");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }        
-            strcpy(teststring,"DATETIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=4;
-            }
-            strcpy(teststring,"TIME");
-            compresult = strcmp(types[count], teststring);
-            if(compresult==0){
-                tp=5;
-            }
 
             if(tp==0){
                 fprintf(fcpph,"\tpublic int  %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
             }else if(tp==1){
                 fprintf(fcpph,"\tpublic float %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
-            }else if(tp==2){
+            }else if(tp==2 || tp==6){
                 fprintf(fcpph,"\tpublic string %s {get=>_%s; set=> _%s=value;}\n", fields[count], fields[count], fields[count]);
                 
             }else if(tp==3){

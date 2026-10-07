@@ -1,0 +1,20 @@
+global using System; global using System.Collections.Generic; global using System.Data; global using System.Linq; global using AAFD_BO;
+public class SearchField {public string FieldName="",EQUALS="=";public Type FieldType=typeof(string); public int SearchType;public DateTime dateValue2;}
+public class UserViewField {public string FieldName="";}
+public class UserViewFieldBL {public List<UserViewField> getUserViewFields(int i)=>new();}
+public static class DALGlobal {public static string connectionString="";public static T processSearchFieldFilters<T>(T cmd,List<SearchField> f)=>cmd;}
+public class AuditLogD {public AuditLog save(AuditLog a)=>a;}
+public class AuditLogBL {public AuditLog save(AuditLog a)=>a;}
+public partial class AuditLogController {private List<AuditLog> items=new();}
+public interface IDataSession {IDbConnection Connection {get;} }
+public class Parameters {public void AddWithValue(string name,object value){} }
+public class MySqlConnection:IDisposable {public MySqlConnection(string s){}public void Open(){}public void Close(){}public void Dispose(){} }
+public class MySqlCommand:IDisposable {public MySqlCommand(string s,MySqlConnection c){}public CommandType CommandType;public Parameters Parameters=new();public object ExecuteScalar()=>1; public int ExecuteNonQuery()=>1;public MySqlDataReader ExecuteReader()=>new();public void Dispose(){} }
+public class MySqlDataReader:IDisposable {public bool Read()=>false;public void Close(){}public bool IsDBNull(string name)=>false;public int GetInt32(string name)=>0;public double GetDouble(string name)=>0;public string GetString(string name)=>"";public DateTime GetDateTime(string name)=>DateTime.MinValue; public bool GetBoolean(string name)=>false; public void Dispose(){} }
+public class MySqlDataAdapter:IDisposable {public MySqlDataAdapter(string s,MySqlConnection c){SelectCommand=new(s,c);} public MySqlCommand SelectCommand;public void Fill(DataTable t){}public void Dispose(){} }
+public class SqlConnection:IDisposable {public SqlConnection(string s){}public void Open(){}public void Close(){}public void Dispose(){} }
+public class SqlCommand:IDisposable {public SqlCommand(string s,SqlConnection c){}public CommandType CommandType;public Parameters Parameters=new();public object ExecuteScalar()=>1; public int ExecuteNonQuery()=>1;public SqlDataReader ExecuteReader()=>new();public void Dispose(){} }
+public class SqlDataReader:IDisposable {public bool Read()=>false;public void Close(){} public int GetOrdinal(string name)=>0;public bool IsDBNull(int i)=>false;public int GetInt32(int i)=>0;public double GetDouble(int i)=>0;public string GetString(int i)=>"";public DateTime GetDateTime(int i)=>DateTime.MinValue; public bool GetBoolean(int i)=>false; public void Dispose(){} }
+public class SqlDataAdapter:IDisposable {public SqlDataAdapter(string s,SqlConnection c){SelectCommand=new(s,c);} public SqlCommand SelectCommand;public void Fill(DataTable t){}public void Dispose(){} }
+
+namespace AAFD_BO {public class AuditLog {public enum ActionType {Insert,Update,Delete};public AuditLog(int user,string table,string column,int id,ActionType action,object newer,object older){} }}

@@ -1,0 +1,4 @@
+# Optional C# checker build output
+**/bin/
+**/obj/
+__pycache__/
