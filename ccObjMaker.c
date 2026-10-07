@@ -832,7 +832,7 @@ int main(int argc, char *argv[]){
                 tp=6;
             }
             if(tp==6){
-                fprintf(fcs,"\t\tsql += \",getEDataHKDF(%s,'\" + key + \"',EIV,ES) as %s \";\n", fields[count],fields[count]);
+                fprintf(fcs,"\t\tsql += \",getEDataHKDF(%s,@key,EIV,ES) as %s \";\n", fields[count],fields[count]);
             }else{
                 fprintf(fcs,"\t\tsql += \",%s \";\n", fields[count]);
             }
@@ -1042,7 +1042,7 @@ int main(int argc, char *argv[]){
                 tp=6;
             }
             if(tp==6){
-                fprintf(fcs,"\t\tsql += \",getEDataHKDF(%s,'\" + key + \"',EIV,ES) as %s \";\n", fields[count],fields[count]);
+                fprintf(fcs,"\t\tsql += \",getEDataHKDF(%s,@key,EIV,ES) as %s \";\n", fields[count],fields[count]);
             }else{
                 fprintf(fcs,"\t\tsql += \",%s \";\n", fields[count]);
             }
@@ -1057,6 +1057,11 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\tsql += \" WHERE RecordDeleted=0  \";\n");
         fprintf(fcs,"\t\t//sql += \"AND %sID=\" + o.%sID + \";\";\n", argv[1],argv[1]);
         fprintf(fcs,"\t\ttry{\n");
+        fprintf(fcs,"\t\t\tif(incKey){\n");
+        fprintf(fcs,"\t\t\t\tusing(MySqlCommand cmd = new MySqlCommand(\"SET @key:='\" + key + \"'\",con)){\n");
+        fprintf(fcs,"\t\t\t\t\tcmd.ExecuteNonQuery();\n");
+        fprintf(fcs,"\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t}\n");
         fprintf(fcs,"\t\t\tusing(MySqlCommand cmd = new MySqlCommand(sql,con)){\n");
         fprintf(fcs,"\t\t\t\tMySqlDataReader r;\n");
         fprintf(fcs,"\t\t\t\tusing(r = cmd.ExecuteReader()){\n");
@@ -1196,7 +1201,7 @@ int main(int argc, char *argv[]){
             if(compresult==0){
                 tp=6;
                 fprintf(fcs,"\t\t\t\telse if(f.FieldName==\"%s\"){\n",fields[count]);
-                fprintf(fcs,"\t\t\t\t\tstrFields += \", getEDataHKDF(%s,'\" + key + \"',EIV,ES) as %s\";\n",fields[count],fields[count]);
+                fprintf(fcs,"\t\t\t\t\tstrFields += \", getEDataHKDF(%s,@key,EIV,ES) as %s\";\n",fields[count],fields[count]);
                 if(hasBIN==1){
                     fprintf(fcs,"\t\t\t\t\tincKey=true;\n");
                 }
@@ -1226,13 +1231,13 @@ int main(int argc, char *argv[]){
             if(count==0){
                 /// leave off the comma
                 if(tp==6){
-                    fprintf(fcs,"\t\t\tstrFields += \"setEDataHKDF(%s,'\" + key + \"',EIV,ES) as %s \";\n", fields[count],fields[count]);
+                    fprintf(fcs,"\t\t\tstrFields += \"setEDataHKDF(%s,@key,EIV,ES) as %s \";\n", fields[count],fields[count]);
                 }else{
                     fprintf(fcs,"\t\t\tstrFields += \"%s \";\n", fields[count]);
                 }
             }else{
                 if(tp==6){
-                    fprintf(fcs,"\t\t\tstrFields += \",setEDataHKDF(%s,'\" + key + \"',EIV,ES) as %s \";\n", fields[count], fields[count]);
+                    fprintf(fcs,"\t\t\tstrFields += \",setEDataHKDF(%s,@key,EIV,ES) as %s \";\n", fields[count], fields[count]);
                 }else{
                     fprintf(fcs,"\t\t\tstrFields += \",%s \";\n", fields[count]);
                 }
@@ -1259,13 +1264,11 @@ int main(int argc, char *argv[]){
                     if(posss==0){
                         fprintf(fcs,"\t\t\t\tif(SortBy==\"%s\"){\n",fields[count]);
                     }else{
-                        fprintf(fcs,"\t\t\t\telse if(SortyBy==\"%s\"){\n",fields[count]);
+                        fprintf(fcs,"\t\t\t\telse if(SortBy==\"%s\"){\n",fields[count]);
                     }
-                    fprintf(fcs,"\t\t\t\t\tSortBy = \"getEDataHKDF(%s,'\" + key + \"',EIV,ES) \";\n",fields[count]);
+                    fprintf(fcs,"\t\t\t\t\tSortBy = \"getEDataHKDF(%s,@key,EIV,ES) \";\n",fields[count]);
                     if(hasBIN==1){
-                        fprintf(fcs,"\t\t\t\t\tif(strIncKey.Length>0 && key.Length>0){\n");
-                        fprintf(fcs,"\t\t\t\t\t\tstrIncKey += \" @key:='\" + key + \"' as kkkey,\";\n");
-                        fprintf(fcs,"\t\t\t\t\t}\n");
+                        fprintf(fcs,"\t\t\t\t\tincKey = true;\n");
                     }
                     fprintf(fcs,"\t\t\t\t}\n");
                     posss ++;
@@ -1470,7 +1473,7 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
         fprintf(fcs,"\t\to = d.save(o,curUserID");
         if(hasBIN==1){
-            fprintf(fcs,", string key");
+            fprintf(fcs,", key");
         }
         fprintf(fcs,");\n");
         fprintf(fcs,"\t\t_LastErrorB = d.LastErrorD; \n");
@@ -1495,11 +1498,20 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t}\n");
         //fprintf(fcs,"}\n");
 
-        fprintf(fcs,"\tpublic List<%s> get%ssL(){\n",argv[1],argv[1]);
+        fprintf(fcs,"\tpublic List<%s> get%ssL(",argv[1],argv[1]);
+        if(hasBIN==1){
+            fprintf(fcs,"string key");
+        }
+        fprintf(fcs,"){\n");
+        fprintf(fcs,",string whereString=\"\"){\n");
         fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
         fprintf(fcs,"\t\tList<%s> l = new List<%s>();\n",argv[1],argv[1]);
         fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
-        fprintf(fcs,"\t\tl = d.get%ssL(); \n",argv[1]);
+        fprintf(fcs,"\t\tl = d.get%ssL(",argv[1]);
+        if(hasBIN==1){
+            fprintf(fcs,"key");
+        }
+        fprintf(fcs,"); \n");
         fprintf(fcs,"\t\t_LastErrorB = d.LastErrorD; \n");
         fprintf(fcs,"\t\treturn l; \n");
         fprintf(fcs,"\t}\n\n");
@@ -1526,7 +1538,7 @@ int main(int argc, char *argv[]){
         if(hasBIN==1){
             fprintf(fcs,",string key");
         }
-        fprintf(fcs,",whereString=\"\"){\n");
+        fprintf(fcs,",string whereString=\"\"){\n");
         fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
         fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
         fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
@@ -1568,13 +1580,21 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\t\t\tdt = d.get%ssDT(srchString, s,SortBy, SortDirection); \n",argv[1]);
         */
 
-        fprintf(fcs,"\t\t\tdt = d.get%ssDT(srchString,filters,o,SortBy, SortDirection); \n",argv[1]);
+        fprintf(fcs,"\t\t\tdt = d.get%ssDT(srchString,filters,o,SortBy, SortDirection",argv[1]);
+        if(hasBIN==1){
+            fprintf(fcs,",key");
+        }
+        fprintf(fcs,",whereString);\n");
         fprintf(fcs,"\t\t\t_LastErrorB = d.LastErrorD; \n");
         fprintf(fcs,"\t\t}\n");
         fprintf(fcs,"\t\treturn dt; \n");
         fprintf(fcs,"\t}\n\n");
         
-        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString, List<SearchField> filters,List<UserViewField> fields,string SortBy, string SortDirection){\n",argv[1]);
+        fprintf(fcs,"\tpublic DataTable get%ssDT(string srchString, List<SearchField> filters,List<UserViewField> fields,string SortBy, string SortDirection",argv[1]);
+        if(hasBIN==1){
+            fprintf(fcs,",string key");
+        }
+        fprintf(fcs,",string whereString=\"\"){\n");
         fprintf(fcs,"\t\t_LastErrorB = \"\";\n");
         fprintf(fcs,"\t\tDataTable dt = new DataTable();\n");
         fprintf(fcs,"\t\t%sD d = new %sD(); \n",argv[1],argv[1]);
@@ -1611,7 +1631,7 @@ int main(int argc, char *argv[]){
         }
         fprintf(fcs,"\t\t\tdt = d.get%ssDT(srchString, s,SortBy,SortDirection); \n",argv[1]);
         */
-        fprintf(fcs,"\t\tdt = d.get%ssDT(srchString,fields,SortBy,SortDirection); \n",argv[1]);
+        fprintf(fcs,"\t\tdt = d.get%ssDT(srchString,filters,fields,SortBy,SortDirection, whereString); \n",argv[1]);
         fprintf(fcs,"\t\t_LastErrorB = d.LastErrorD; \n");
         fprintf(fcs,"\t\treturn dt; \n");
         fprintf(fcs,"\t}\n\n");
@@ -1973,6 +1993,109 @@ int main(int argc, char *argv[]){
         fprintf(fcs,"\t\to.%sID=ret;;\n",argv[1]);
         fprintf(fcs,"\t\treturn o;\n");
         fprintf(fcs,"\t}\n");
+
+
+
+        fprintf(fcs,"\tpublic %s save(IDataSession session,IDbTransaction tx , %s o, int curUserID",argv[1],argv[1]);
+        if(hasBIN==1){
+            fprintf(fcs,",string key");
+        }
+        fprintf(fcs,"){\n");
+        fprintf(fcs,"\t\tint ret = 0;\n");
+        fprintf(fcs,"\t\tusing(var cmd = session.Connection.CreateCommand()){\n");
+        fprintf(fcs,"\t\t\tcmd.CommandText = \"sp_Update%s\"\n", argv[1]);
+        fprintf(fcs,"\t\t\tcmd.CommandType = CommandType.StoredProcedure;\n");
+        fprintf(fcs,"\t\t\tvar parameters = new List<(string Name, object Value)>\n");
+        fprintf(fcs,"\t\t\t{\n");
+        fprintf(fcs,"\t\t\t\t(\"@%sID\",o.%sID),\n",argv[1],argv[1]);
+        count = 0;
+        for(count==0;count<totRows;count++){
+            tp = 2; // 0 = int, 1 = float, 2 = string, 3=decimal, 4=date
+            strcpy(teststring,"INT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
+            strcpy(teststring,"TINYINT");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            }        
+            strcpy(teststring,"int");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=0;
+            } 
+
+            strcpy(teststring,"DECIMAL(10,2)");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=3;
+            }
+            strcpy(teststring,"DATE");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
+            }        
+            strcpy(teststring,"DATETIME");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=4;
+            }
+            strcpy(teststring,"TIME");
+            compresult = strcmp(types[count], teststring);
+            if(compresult==0){
+                tp=5;
+            }
+
+            if(tp==4){
+
+                fprintf(fcs,"\t\t\t\t(\"@%s\",(o.%s<new DateTime(1753,1,1),NBNull.Value,o.%s),\n",fields[count],fields[count],fields[count]);
+
+            }else{
+                fprintf(fcs,"\t\t\t\t(\"@%s\",o.%s),\n",fields[count],fields[count]);
+            }
+        }
+
+        fprintf(fcs,"\t\t\t\t(\"@CurrentUserID\",curUserID),\n");
+        fprintf(fcs,"\t\t\t}\n");
+
+        
+        fprintf(fcs,"\t\t\tforeach (var pItem in parameters)\n");
+        fprintf(fcs,"\t\t\t{\n");
+        fprintf(fcs,"\t\t\t\tvar p = cmd.CreateParameter();\n");
+        fprintf(fcs,"\t\t\t\tp.ParameterName = pItem.Name;\n");
+        fprintf(fcs,"\t\t\t\tp.Value = pItem.Value ?? DBNull.Value;\n");
+        fprintf(fcs,"\t\t\t\tcmd.Parameters.Add(p);\n");
+        fprintf(fcs,"\t\t\t}\n");
+
+        fprintf(fcs,"\t\t\ttry{\n");
+        fprintf(fcs,"\t\t\t\tvar recid = cmd.ExecuteScalar();\n");
+        fprintf(fcs,"\t\t\t\tif (recid != null && recid != DBNull.Value){\n");
+        fprintf(fcs,"\t\t\t\t\tio.InspectionId = Convert.ToInt32(recid);\n");
+        fprintf(fcs,"\t\t\t\t}else{\n");
+        fprintf(fcs,"\t\t\t\t\tthrow new Exception(\"No ID returned from stored procedure\");\n");
+        fprintf(fcs,"\t\t\t\t}\n");
+        fprintf(fcs,"\t\t\t}catch (Exception ex){\n");
+        fprintf(fcs,"\t\t\t\t_LastErrorD = ex.Message;\n");
+        fprintf(fcs,"\t\t\t\tthrow;\n");
+        fprintf(fcs,"\t\t\t}\n");
+        fprintf(fcs,"\t\t}\n");
+        fprintf(fcs,"\n");
+        fprintf(fcs,"\t\to.%sID=ret;;\n",argv[1]);
+        fprintf(fcs,"\t\treturn o;\n");
+        fprintf(fcs,"\t}\n");
+
+
+
+
+
+
+
+
+
+
+
 
         fprintf(fcs,"\tpublic int delete(%s o, int curUserID){\n",argv[1]);
         fprintf(fcs,"\t\tint ret = 0;\n");
